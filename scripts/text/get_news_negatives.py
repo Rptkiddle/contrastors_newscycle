@@ -164,11 +164,17 @@ if __name__ == "__main__":
     del model
     torch.cuda.empty_cache()
 
+    # OLD CODE - 
+    # index = faiss.IndexFlatIP(len(q_embed[0]))
+    # co = faiss.GpuMultipleClonerOptions()
+    # co.shard = True
+    # co.useFloat16 = True
+    # index = faiss.index_cpu_to_all_gpus(index, co=co)
+    # index.add(np.array(d_embed).astype(np.float32))
+
+    # NEW CODE - 
     index = faiss.IndexFlatIP(len(q_embed[0]))
-    co = faiss.GpuMultipleClonerOptions()
-    co.shard = True
-    co.useFloat16 = True
-    index = faiss.index_cpu_to_all_gpus(index, co=co)
+    index = faiss.index_cpu_to_all_gpus(index)
     index.add(np.array(d_embed).astype(np.float32))
 
     scores, indices = knn_neighbors(q_embed, index, args.batch_size, args.k)
