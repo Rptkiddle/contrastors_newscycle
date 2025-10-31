@@ -79,7 +79,7 @@ datasets:
       columns: ["query", "document", "negatives"]
 
   - name: "newscycle"
-    bucket: "/absolute/path/to/my_finetune/shard-{00000..00003}.jsonl.gz"
+    bucket: "/home/rkiddle/data/finetuning/shard-{00000..00004}.jsonl.gz"
     query_prefix: "search_query"
     document_prefix: "search_document"
     objective:
