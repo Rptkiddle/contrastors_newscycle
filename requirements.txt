@@ -8,6 +8,7 @@ anyio
 async-timeout
 attrs
 av
+awscli
 beautifulsoup4
 beir
 blis
@@ -43,7 +44,7 @@ filelock
 flatbuffers
 fonttools
 frozenlist
-fsspec>=2024.3.1
+fsspec
 ftfy
 gitdb
 GitPython

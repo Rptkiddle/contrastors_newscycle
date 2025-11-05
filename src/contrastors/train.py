@@ -5,6 +5,15 @@ from argparse import ArgumentParser, ArgumentTypeError
 import deepspeed
 import torch
 import torch.distributed as dist
+import sys
+
+# Make local `src/` available on sys.path so this script can be executed
+# directly (e.g. `python src/contrastors/train.py`) without pip installing
+# the package. train.py lives in src/contrastors/, so add its parent dir.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_SRC_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, ".."))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 from contrastors.read import read_config
 from contrastors.trainers import TRAINER_REGISTRY
