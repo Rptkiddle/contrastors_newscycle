@@ -130,7 +130,7 @@ class MultiHeadAttentionPooling(nn.Module):
 
     def forward(self, hidden_states, input_ids, attention_mask):
         if attention_mask is not None:
-            hidden_states, indices, cu_seqlens, max_seqlen_in_batch = unpad_input(hidden_states, attention_mask)
+            hidden_states, indices, cu_seqlens, max_seqlen_in_batch, *_ = unpad_input(hidden_states, attention_mask)
         else:
             indices = None
             cu_seqlens = None

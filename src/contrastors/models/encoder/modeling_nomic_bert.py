@@ -330,7 +330,9 @@ class NomicBertEncoder(NomicBertPreTrainedModel):
 
         batch, seqlen = hidden_states.shape[:2]
         if not self.gradient_checkpointing and getattr(self.config, "moe_every_n_layers", 0) <= 0:
-            hidden_states, indices, cu_seqlens, max_seqlen_in_batch = unpad_input(hidden_states, attention_mask)
+            hidden_states, indices, cu_seqlens, max_seqlen_in_batch, *_ = unpad_input(
+                hidden_states, attention_mask
+            )
         else:
             indices, cu_seqlens, max_seqlen_in_batch = None, None, None
 

@@ -71,7 +71,7 @@ class MoEBlock(nn.Module):
         input_shape = hidden_states.shape
         batch, seqlen = hidden_states.shape[:2]
         if attention_mask is not None:
-            hidden_states, indices, _, _ = unpad_input(hidden_states, attention_mask)
+            hidden_states, indices, _, _, *_ = unpad_input(hidden_states, attention_mask)
         hidden_states = hidden_states.reshape(-1, input_shape[-1])
         # (bs * s, num_experts)
         # TODO: could use fp32 here as switch transformer found it didn't diverge

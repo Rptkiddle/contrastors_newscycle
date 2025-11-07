@@ -153,7 +153,7 @@ class FlashAttention(nn.Module):
             if self.num_heads == self.num_heads_kv:
                 if cu_seqlens is None and max_seq_len is None:
                     bsz, q_len, h_size = hidden_states.shape
-                    unpadded_qkv, indices, cu_seqlens, max_seq_len = unpad_input(qkv, attention_mask)
+                    unpadded_qkv, indices, cu_seqlens, max_seq_len, *_ = unpad_input(qkv, attention_mask)
 
                     attn_outputs = flash_attn_varlen_qkvpacked_func(
                         unpadded_qkv,
@@ -183,8 +183,8 @@ class FlashAttention(nn.Module):
             else:
                 if cu_seqlens is None and max_seq_len is None:
                     bsz, q_len, h_size = hidden_states.shape
-                    unpadded_q, indices_q, cu_seqlens, max_seq_len = unpad_input(q, attention_mask)
-                    unpadded_kv, _, cu_seqlens_k, max_seq_len_k = unpad_input(kv, attention_mask)
+                    unpadded_q, indices_q, cu_seqlens, max_seq_len, *_ = unpad_input(q, attention_mask)
+                    unpadded_kv, _, cu_seqlens_k, max_seq_len_k, *_ = unpad_input(kv, attention_mask)
 
                     attn_outputs = flash_attn_varlen_kvpacked_func(
                         q=unpadded_q,
@@ -385,9 +385,9 @@ class FlashAttentionPooling(nn.Module):
         if attention_mask is not None:
             # varlen, ignore padding tokens, efficient for large batch with many paddings
             assert attention_mask is not None
-            unpadded_q, _, cu_seqlens, max_seqlen = unpad_input(q, torch.ones_like(attention_mask))
+            unpadded_q, _, cu_seqlens, max_seqlen, *_ = unpad_input(q, torch.ones_like(attention_mask))
             if cu_seqlens_k is None and max_seqlen_k is None:
-                unpadded_kv, indices_kv, cu_seqlens_k, max_seqlen_k = unpad_input(kv, attention_mask)
+                unpadded_kv, indices_kv, cu_seqlens_k, max_seqlen_k, *_ = unpad_input(kv, attention_mask)
 
                 attn_outputs = flash_attn_varlen_kvpacked_func(
                     unpadded_q,
