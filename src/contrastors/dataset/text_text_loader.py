@@ -213,6 +213,9 @@ class StreamingShardDataset(IterableDataset):
         # when `parse_spec` is called, if this is not s3, it will be updated
         self.filesystem = "s3"
         self.fs = fsspec.filesystem(self.filesystem, config_kwargs={"connect_timeout": 600, "read_timeout": 600})
+        # cache for scheme-specific or bucket-specific filesystems
+        # keys can be 's3' or 'file' for now; we may extend to per-bucket in future
+        self._fs_cache = {self.filesystem: self.fs}
         self.ds_paths = self.parse_spec(ds_spec)
         self.current_paths = [path for path in self.ds_paths]
 
@@ -255,6 +258,24 @@ class StreamingShardDataset(IterableDataset):
 
         return norm_urls
 
+    def get_fs_for_path(self, path: str):
+        """Return an fsspec filesystem appropriate for the given path.
+
+        Current simple heuristic:
+        - if path starts with 's3://' return an S3 filesystem (cached)
+        - otherwise return the instance-level `self.fs` (which may be local)
+        """
+        try:
+            if isinstance(path, str) and path.startswith("s3://"):
+                if "s3" not in self._fs_cache:
+                    self._fs_cache["s3"] = fsspec.filesystem("s3", config_kwargs={"connect_timeout": 600, "read_timeout": 600})
+                return self._fs_cache["s3"]
+        except Exception:
+            # Fall back to default fs if constructing an s3 fs fails for any reason
+            pass
+        # default
+        return self.fs
+
     def parse_spec(self, fname):
         with open(fname) as stream:
             spec = yaml.safe_load(stream)
@@ -276,7 +297,9 @@ class StreamingShardDataset(IterableDataset):
                     self.fs = fsspec.filesystem(self.filesystem)
 
             bucket = "/".join(ds["bucket"].split("/")[:-1])
-            with self.fs.open(f"{bucket}/counts.json", "r") as stream:
+            # Use an appropriate filesystem for this bucket (s3 or local)
+            bucket_fs = self.get_fs_for_path(bucket)
+            with bucket_fs.open(f"{bucket}/counts.json", "r") as stream:
                 counts_per_file = json.load(stream)
 
             # annoying backwards compatability
@@ -285,7 +308,7 @@ class StreamingShardDataset(IterableDataset):
 
             # normalize urls for counts 
             counts_per_file = {url.replace("s3://", ""): count for url, count in counts_per_file.items()}
-            with self.fs.open(f"{bucket}/offsets.json.gz", "rb", compression="gzip") as stream:
+            with bucket_fs.open(f"{bucket}/offsets.json.gz", "rb", compression="gzip") as stream:
                 offsets = json.load(stream)
             offsets = {url.replace("s3://", ""): offset for url, offset in offsets.items()}
 
@@ -477,7 +500,9 @@ class StreamingShardDataset(IterableDataset):
                 self.path2stream[path] = gzip.open(local_path, "rb")
             stream = self.path2stream[path]
         else:
-            stream = self.fs.open(path, "rb", compression="gzip", cache_type="background", block_size=2**20)
+            # choose filesystem appropriate for this path (s3 or local)
+            fs = self.get_fs_for_path(path)
+            stream = fs.open(path, "rb", compression="gzip", cache_type="background", block_size=2**20)
 
         # get offset for the rank since we read in `rank_batch_size` chunks
         rank_processed = num_processed + self.rank * self.rank_batch_size
@@ -506,7 +531,9 @@ class StreamingShardDataset(IterableDataset):
             if not local_path.parent.exists():
                 local_path.parent.mkdir(parents=True, exist_ok=True)
             if not local_path.exists():
-                self.fs.get(s3_path, str(local_path))
+                # Use the appropriate filesystem for this path (s3 or local)
+                fs = self.get_fs_for_path(s3_path)
+                fs.get(s3_path, str(local_path))
 
         dist.barrier()
 
@@ -722,7 +749,12 @@ class LocalShardDataset(Dataset):
             if not local_path.parent.exists():
                 local_path.parent.mkdir(parents=True, exist_ok=True)
             if not local_path.exists():
-                self.fs.get(s3_path, str(local_path))
+                # Use s3 filesystem if path is s3://, otherwise use configured fs
+                if isinstance(s3_path, str) and s3_path.startswith("s3://"):
+                    s3fs = fsspec.filesystem("s3", config_kwargs={"connect_timeout": 600, "read_timeout": 600})
+                    s3fs.get(s3_path, str(local_path))
+                else:
+                    self.fs.get(s3_path, str(local_path))
 
         dist.barrier()
 
