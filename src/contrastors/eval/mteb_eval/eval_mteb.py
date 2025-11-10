@@ -7,6 +7,15 @@ from argparse import ArgumentParser
 
 from mteb import MTEB
 
+# Allow running this script directly from the repository (without pip installing).
+# Ensure the repository `src/` directory is on sys.path so `import contrastors...` works.
+import os
+import sys
+
+repo_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if repo_src not in sys.path:
+    sys.path.insert(0, repo_src)
+
 from contrastors.eval.encoder import Encoder, HFEncoder, STransformer
 
 logging.basicConfig(level=logging.INFO)
