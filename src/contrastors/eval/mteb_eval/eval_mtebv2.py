@@ -213,8 +213,41 @@ class MTEBv2EncoderAdapter:
     
     @property
     def mteb_model_meta(self) -> ModelMeta:
-        """Return model metadata."""
-        return ModelMeta(framework=["PyTorch"])
+        """Return model metadata for custom model."""
+        # Ensure name is in correct format
+        model_name = self._model_name
+        if '/' not in model_name:
+            model_name = f"custom/{model_name}"
+        
+        return ModelMeta(
+            name=model_name,
+            revision=self._revision,
+            release_date=None,
+            languages=None,
+            
+            # Loader is None since this is a custom implementation
+            loader=None,
+            
+            # Model specs - use None for unknown values
+            n_parameters=None,
+            memory_usage_mb=None,
+            max_tokens=getattr(self.v1_encoder, 'max_seq_length', None),
+            embed_dim=None,  # Will be derived from embeddings
+            
+            # Licensing/openness
+            license=None,  # None since open_weights is False
+            open_weights=False,
+            public_training_code=None,
+            public_training_data=None,
+            
+            # Technical details
+            framework=["Sentence Transformers", "PyTorch"],
+            similarity_fn_name="cosine",
+            use_instructions=False,
+            
+            # Training info
+            training_datasets={},  # Empty dict for custom models
+        )
     
     def __getattr__(self, name):
         """Pass through attribute access to wrapped encoder."""
