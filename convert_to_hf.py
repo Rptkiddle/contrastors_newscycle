@@ -1,4 +1,19 @@
+from pathlib import Path
+import sys
 from argparse import ArgumentParser
+
+# Make the local `src/` directory importable so this script can run without
+# installing the package (e.g. `pip install -e .`). This prepends the
+# repository's `src` folder to sys.path when present.
+_HERE = Path(__file__).resolve().parent
+_SRC = _HERE / "src"
+if not _SRC.exists():
+    # In case the script is executed from a different layout, also try parent
+    # (useful if file is moved into a subfolder temporarily).
+    _SRC = _HERE.parent / "src"
+if _SRC.exists():
+    sys.path.insert(0, str(_SRC))
+
 
 from contrastors.models.biencoder import BiEncoder, BiEncoderConfig
 from contrastors.models.dual_encoder import DualEncoder, DualEncoderConfig
