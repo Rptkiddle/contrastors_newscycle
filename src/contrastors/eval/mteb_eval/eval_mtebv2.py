@@ -246,7 +246,7 @@ class MTEBv2EncoderAdapter:
             use_instructions=False,
             
             # Training info
-            training_datasets={},  # Empty dict for custom models
+            training_datasets={"Custom"},  # Empty dict for custom models
         )
     
     def __getattr__(self, name):
