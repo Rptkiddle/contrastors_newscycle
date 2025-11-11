@@ -4,15 +4,13 @@ import logging
 import os
 import time
 from argparse import ArgumentParser
-from typing import Any
 
 # ============================================================================
-# V2 IMPORTS: Added ResultCache and proper typing for encoder protocol
+# V2 IMPORTS: Clean imports based on actual MTEB v2 structure
 # ============================================================================
 import mteb
 from mteb.cache import ResultCache
-from mteb.encoder_interface import PromptType  # Import v2 types
-from mteb.model_meta import ModelMeta
+from mteb.encoder_interface import PromptType  # Type for prompt_type parameter
 
 # Allow running this script directly from the repository (without pip installing).
 # Ensure the repository `src/` directory is on sys.path so `import contrastors...` works.
@@ -32,7 +30,7 @@ logger = logging.getLogger("main")
 os.environ['OPENBLAS_NUM_THREADS'] = '16'
 
 # ============================================================================
-# TASK LISTS: No changes needed - these remain the same in v2
+# TASK LISTS: No changes needed
 # ============================================================================
 TASK_LIST_CLASSIFICATION = [
     "AmazonCounterfactualClassification",
@@ -131,64 +129,33 @@ TASK_LIST = (
 
 
 # ============================================================================
-# V2 NEW: Create a ModelMeta wrapper that properly integrates with MTEB v2
-# This is the CORRECT way to make a custom model work with MTEB v2
+# V2: Simple adapter implementing EncoderProtocol
 # ============================================================================
-class V1EncoderModelMeta(ModelMeta):
-    """
-    ModelMeta wrapper for v1 encoders to work with MTEB v2.
-    
-    MTEB v2 expects models to be loaded through ModelMeta objects.
-    This wrapper:
-    1. Takes a pre-initialized v1 encoder
-    2. Wraps it to be v2-compatible
-    3. Returns it when load_model() is called
-    """
-    
-    def __init__(self, v1_encoder, model_name: str):
-        """
-        Args:
-            v1_encoder: Pre-initialized v1 encoder
-            model_name: Name identifier for the model
-        """
-        self.v1_encoder = v1_encoder
-        self._model_name = model_name
-        
-    def load_model(self, **kwargs) -> Any:
-        """
-        Load and return the v2-compatible wrapped encoder.
-        
-        Returns:
-            V1toV2EncoderAdapter that wraps the v1 encoder
-        """
-        return V1toV2EncoderAdapter(self.v1_encoder)
-    
-    @property
-    def name(self) -> str:
-        return self._model_name
-
-
-class V1toV2EncoderAdapter:
+class MTEBv2EncoderAdapter:
     """
     Adapter to make v1 encoders compatible with MTEB v2 EncoderProtocol.
     
-    This class properly implements the v2 encoder interface by:
-    1. Accepting the full v2 encode() signature
-    2. Unpacking DataLoader batches to extract text
-    3. Passing text to the v1 encoder
+    This implements the exact signature required by MTEB v2's EncoderProtocol:
+    - encode(inputs: DataLoader[BatchedInput], *, task_metadata, hf_split, 
+             hf_subset, prompt_type=None, **kwargs)
     
-    The key difference from our previous wrapper: This is designed to work
-    with MTEB's internal type checking and protocol requirements.
+    The adapter:
+    1. Accepts v2 format (DataLoader with batched inputs)
+    2. Unpacks batches to extract text sentences
+    3. Calls v1 encoder with list of strings
+    4. Returns embeddings
     """
     
     def __init__(self, v1_encoder):
         """
+        Initialize adapter with a v1 encoder.
+        
         Args:
-            v1_encoder: An encoder with v1 signature encode(sentences: list[str])
+            v1_encoder: Encoder with v1 signature encode(sentences: list[str], **kwargs)
         """
         self.v1_encoder = v1_encoder
         
-        # Pass through attributes for compatibility
+        # Pass through any attributes the v1 encoder has for compatibility
         for attr in ['model_name', 'max_seq_length', 'device']:
             if hasattr(v1_encoder, attr):
                 setattr(self, attr, getattr(v1_encoder, attr))
@@ -197,40 +164,47 @@ class V1toV2EncoderAdapter:
         self,
         inputs,
         *,
-        task_metadata=None,
-        hf_split: str = None,
-        hf_subset: str = None,
+        task_metadata,
+        hf_split: str,
+        hf_subset: str,
         prompt_type: PromptType | None = None,
-        **kwargs
+        **kwargs,
     ):
         """
-        V2 encode method with full signature matching EncoderProtocol.
+        Encode inputs according to MTEB v2 EncoderProtocol.
         
         Args:
-            inputs: DataLoader yielding batches with {"text": list[str], ...}
-            task_metadata: Metadata about the task (v2 only)
-            hf_split: Split being evaluated, e.g., "test", "dev" (v2 only)
-            hf_subset: Subset being evaluated (v2 only)
-            prompt_type: Prompt type like "query" or "passage" (v2 only)
-            **kwargs: Additional arguments for encoding
+            inputs: DataLoader yielding batches with format:
+                    {"text": list[str], "images": list[PIL.Image], ...}
+            task_metadata: Metadata about the task being evaluated
+            hf_split: Split being evaluated (e.g., "test", "dev")
+            hf_subset: Subset being evaluated
+            prompt_type: Type of prompt (e.g., "query", "passage")
+            **kwargs: Additional arguments passed to v1 encoder
         
         Returns:
-            Array of embeddings
+            Embeddings as numpy array or torch tensor
         """
-        # Unpack DataLoader to extract all text sentences
+        # Step 1: Unpack the DataLoader to extract all text sentences
+        # The DataLoader yields batches like: {"text": ["sent1", "sent2", ...], ...}
         sentences = []
         for batch in inputs:
             if "text" in batch:
                 sentences.extend(batch["text"])
         
-        # Call v1 encoder with unpacked sentences
-        # V2 metadata parameters are ignored by v1 encoder but available if needed
+        # Step 2: Call the v1 encoder with the list of sentences
+        # The v1 encoder expects: encode(sentences: list[str], **kwargs)
         embeddings = self.v1_encoder.encode(sentences, **kwargs)
+        
+        # Note: task_metadata, hf_split, hf_subset, and prompt_type are v2-specific
+        # parameters that the v1 encoder doesn't use. They're available here if you
+        # want to add task-specific logic in the future (e.g., different handling
+        # based on task type or prompt type).
         
         return embeddings
     
     def __getattr__(self, name):
-        """Pass through attribute access to wrapped encoder."""
+        """Pass through any other attribute access to the wrapped v1 encoder."""
         return getattr(self.v1_encoder, name)
 
 
@@ -259,28 +233,27 @@ if __name__ == "__main__":
     no_normalize_classification = args.no_normalize_classification
     
     # ============================================================================
-    # MODEL INITIALIZATION: No changes to this section
-    # We still create the model the same way as in v1
+    # MODEL INITIALIZATION: Same as v1
     # ============================================================================
     if args.hf_model:
         v1_encoder = HFEncoder(args.model_name, seq_length=args.seq_length)
     else:
         v1_encoder = Encoder(
-            model_name, seq_length=seq_length, tokenizer_name=tokenizer_name, matryoshka_dim=args.matryoshka_dim
+            model_name, seq_length=seq_length, tokenizer_name=tokenizer_name, 
+            matryoshka_dim=args.matryoshka_dim
         )
     print(f"Add prefix: {args.add_prefix}")
     v1_encoder = STransformer(v1_encoder, add_prefix=args.add_prefix, binarize=args.binarize)
 
     # ============================================================================
-    # V2: Wrap the v1 encoder using ModelMeta pattern
-    # This is the proper v2 way to integrate custom models
+    # V2: Wrap v1 encoder with v2 adapter
+    # This is all you need - just wrap and pass to mteb.evaluate()
     # ============================================================================
-    model_meta = V1EncoderModelMeta(v1_encoder, model_name=model_name)
-    model = model_meta.load_model()
-    logger.info("Wrapped v1 encoder in v2-compatible adapter")
+    model = MTEBv2EncoderAdapter(v1_encoder)
+    logger.info("Created v2-compatible encoder adapter")
 
     # ============================================================================
-    # TASK PREFIX MAPPING: No changes - preserved as-is (even though not used in loop)
+    # TASK PREFIX MAPPING: Preserved from v1 (currently unused)
     # ============================================================================
     task2prefix = {}
     for task in TASK_LIST_CLASSIFICATION:
@@ -302,77 +275,41 @@ if __name__ == "__main__":
         task2prefix[task] = {"query": "classification", "document": "classification"}
 
     # ============================================================================
-    # V2: Setup ResultCache for managing results
-    # This replaces the simple output_folder approach from v1
+    # V2: Setup ResultCache for result management
     # ============================================================================
-    # Build cache path name (similar to v1's output_name pattern)
     cache_path = f"results/{model_name}binarize_{args.binarize}"
     if args.matryoshka_dim:
         cache_path += f"_matryoshka_{args.matryoshka_dim}"
     
-    # Create ResultCache object - this manages all result storage in v2
     cache = ResultCache(cache_path=cache_path)
     logger.info(f"Results will be saved to: {cache_path}")
 
     # ============================================================================
-    # EVALUATION LOOP: Significant v2 changes here
+    # EVALUATION LOOP: v2 changes
     # ============================================================================
     start = time.time()
-    for task_name in TASK_LIST:  # Renamed from 'task' to 'task_name' for clarity
+    for task_name in TASK_LIST:
         logger.info(f"Running task: {task_name}")
         
-        # ========================================================================
-        # V2 CHANGE: Split selection now happens when GETTING the task
-        # Previously in v1: eval_splits was passed to evaluation.run()
-        # Now in v2: eval_splits is passed to mteb.get_task()
-        # ========================================================================
+        # V2: Configure split when getting the task
         eval_splits = ["dev"] if task_name == "MSMARCO" else ["test"]
-        
-        # V2: Get the task object with splits configured
-        # This creates a properly configured task object that knows which splits to evaluate
         task = mteb.get_task(task_name, eval_splits=eval_splits)
         logger.info(f"Configured task '{task_name}' with splits: {eval_splits}")
         
-        # ========================================================================
-        # V1 CODE (for reference - DO NOT USE):
-        # evaluation = MTEB(tasks=[task_name], task_langs=["en"])
-        # evaluation.run(
-        #     model, 
-        #     output_folder=output_name, 
-        #     eval_splits=eval_splits, 
-        #     show_progress_bar=True, 
-        #     batch_size=16384
-        # )
-        # ========================================================================
-        
-        # ========================================================================
-        # V2 CODE: Use mteb.evaluate() with proper v2 parameters
-        # ========================================================================
+        # V2: Evaluate with proper v2 parameters
         results = mteb.evaluate(
-            model,                          # V2: First argument is the model
-            tasks=[task],                   # V2: Pass the configured task object (not just name)
-            cache=cache,                    # V2: Use ResultCache for result management
-            encode_kwargs={"batch_size": 16384},  # V2: batch_size goes in encode_kwargs!
-            # V2 REMOVED: task_langs - language filtering done in get_task() if needed
-            # V2 REMOVED: eval_splits - configured in get_task() above
-            # V2 REMOVED: output_folder - replaced by cache parameter
-            # V2 REMOVED: show_progress_bar - likely enabled by default
-            # V2 OPTIONAL (not using): prediction_folder="path" for saving predictions
-            # V2 OPTIONAL (not using): co2_tracker=True for carbon tracking
+            model,                                    # Custom model implementing EncoderProtocol
+            tasks=[task],                             # Task object with configured splits
+            cache=cache,                              # ResultCache for result management
+            encode_kwargs={"batch_size": 16384},      # Encoding parameters
         )
         
         logger.info(f"Completed task: {task_name}")
         
         # ========================================================================
-        # V2 NOTE: Results are automatically saved to the cache
-        # You can access them via: results.to_dataframe() if needed
-        # ========================================================================
-        
-        # ========================================================================
-        # PRESERVED: Commented-out functionality from v1 (keeping for reference)
+        # PRESERVED: Commented-out functionality from v1
         # ========================================================================
         # model.doc_as_query = task_name == "QuoraRetrieval"
-
         # prefixes = task2prefix[task_name]
         # model.query_prefix = prefixes["query"]
         # model.docoment_prefix = prefixes["document"]
@@ -382,17 +319,9 @@ if __name__ == "__main__":
         # else:
         #     model.set_normalize(True)
         
-        # Preserved: breakpoint for debugging
         breakpoint()
 
     end = time.time()
     print(f"Time taken (mins): {(end-start)/60}")
     
-    # ============================================================================
-    # V2 BONUS: You can now easily load and analyze results
-    # ============================================================================
     logger.info(f"\nResults saved to cache at: {cache_path}")
-    logger.info("To load results later, use:")
-    logger.info(f"  cache = ResultCache(cache_path='{cache_path}')")
-    logger.info(f"  results = cache.load_results(models=['{model_name}'], tasks=TASK_LIST)")
-    logger.info("  df = results.to_dataframe()")
