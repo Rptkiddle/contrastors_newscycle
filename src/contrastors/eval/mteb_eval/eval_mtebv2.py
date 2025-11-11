@@ -136,6 +136,7 @@ import numpy as np
 from mteb.models.model_meta import ModelMeta
 from mteb.types import PromptType
 
+
 class MTEBv2EncoderAdapter:
     """
     Adapter to make v1 encoders compatible with MTEB v2 EncoderProtocol.
@@ -144,17 +145,12 @@ class MTEBv2EncoderAdapter:
     def __init__(self, v1_encoder, model_name: str | None = None, revision: str | None = None, **kwargs: Any) -> None:
         """
         Initialize adapter with a v1 encoder.
-        
-        Args:
-            v1_encoder: Encoder with v1 signature encode(sentences: list[str], **kwargs)
-            model_name: Name of the model (for MTEB compatibility)
-            revision: Model revision (for MTEB compatibility)
         """
         self.v1_encoder = v1_encoder
         self._model_name = model_name or getattr(v1_encoder, 'model_name', 'custom_model')
         self._revision = revision
         
-        # Pass through any attributes the v1 encoder has for compatibility
+        # Pass through attributes
         for attr in ['max_seq_length', 'device']:
             if hasattr(v1_encoder, attr):
                 setattr(self, attr, getattr(v1_encoder, attr))
@@ -169,16 +165,14 @@ class MTEBv2EncoderAdapter:
         prompt_type: PromptType | None = None,
         **kwargs: Any,
     ):
-        """
-        Encode inputs according to MTEB v2 EncoderProtocol.
-        """
-        # Step 1: Unpack the DataLoader to extract all text sentences
+        """Encode inputs according to MTEB v2 EncoderProtocol."""
+        # Unpack DataLoader to extract text sentences
         sentences = []
         for batch in inputs:
             if "text" in batch:
                 sentences.extend(batch["text"])
         
-        # Step 2: Call the v1 encoder with the list of sentences
+        # Call v1 encoder
         embeddings = self.v1_encoder.encode(sentences, **kwargs)
         
         # Convert to numpy array if needed
@@ -188,77 +182,42 @@ class MTEBv2EncoderAdapter:
         return embeddings
     
     def similarity(self, embeddings1, embeddings2):
-        """
-        Compute the similarity between two collections of embeddings.
-        
-        Returns a matrix of shape [num_embeddings_1, num_embeddings_2].
-        """
+        """Compute similarity matrix between two collections of embeddings."""
         import torch
         
-        # Convert to torch tensors if needed
         if isinstance(embeddings1, np.ndarray):
             embeddings1 = torch.from_numpy(embeddings1)
         if isinstance(embeddings2, np.ndarray):
             embeddings2 = torch.from_numpy(embeddings2)
         
-        # Compute cosine similarity matrix
-        # Normalize embeddings
+        # Normalize and compute cosine similarity matrix
         embeddings1_norm = embeddings1 / embeddings1.norm(dim=1, keepdim=True)
         embeddings2_norm = embeddings2 / embeddings2.norm(dim=1, keepdim=True)
         
-        # Compute similarity matrix
-        similarity_matrix = torch.mm(embeddings1_norm, embeddings2_norm.t())
-        
-        return similarity_matrix
+        return torch.mm(embeddings1_norm, embeddings2_norm.t())
     
     def similarity_pairwise(self, embeddings1, embeddings2):
-        """
-        Compute pairwise similarity between corresponding pairs of embeddings.
-        
-        Returns a vector of shape [num_embeddings].
-        """
+        """Compute pairwise similarity between corresponding pairs."""
         import torch
         
-        # Convert to torch tensors if needed
         if isinstance(embeddings1, np.ndarray):
             embeddings1 = torch.from_numpy(embeddings1)
         if isinstance(embeddings2, np.ndarray):
             embeddings2 = torch.from_numpy(embeddings2)
         
-        # Normalize embeddings
+        # Normalize and compute pairwise cosine similarity
         embeddings1_norm = embeddings1 / embeddings1.norm(dim=1, keepdim=True)
         embeddings2_norm = embeddings2 / embeddings2.norm(dim=1, keepdim=True)
         
-        # Compute pairwise cosine similarity
-        pairwise_similarity = torch.sum(embeddings1_norm * embeddings2_norm, dim=1)
-        
-        return pairwise_similarity
+        return torch.sum(embeddings1_norm * embeddings2_norm, dim=1)
     
     @property
     def mteb_model_meta(self) -> ModelMeta:
         """Return model metadata."""
-        return ModelMeta(
-            name=f"custom/{self._model_name}" if '/' not in self._model_name else self._model_name,
-            revision=self._revision or "unknown",
-            release_date=None,
-            languages=None,
-            loader="custom",  # Required field
-            n_parameters=None,  # Can be None if unknown
-            memory_usage_mb=None,  # Can be None if unknown
-            max_tokens=getattr(self.v1_encoder, 'max_seq_length'),
-            embed_dim=None,  # Will be inferred from embeddings
-            license=None,
-            open_weights=False,
-            public_training_code=None,
-            public_training_data=None,
-            framework=["PyTorch"],  
-            similarity_fn_name="cosine",
-            use_instructions=False, 
-            training_datasets={'placeholder': 'none'},  
-        )
+        return ModelMeta(framework=["PyTorch"])
     
     def __getattr__(self, name):
-        """Pass through any other attribute access to the wrapped v1 encoder."""
+        """Pass through attribute access to wrapped encoder."""
         return getattr(self.v1_encoder, name)
 
 
