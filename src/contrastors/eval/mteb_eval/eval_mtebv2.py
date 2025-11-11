@@ -245,16 +245,16 @@ class MTEBv2EncoderAdapter:
             loader="custom",  # Required field
             n_parameters=None,  # Can be None if unknown
             memory_usage_mb=None,  # Can be None if unknown
-            max_tokens=getattr(self.v1_encoder, 'max_seq_length', 512),
+            max_tokens=getattr(self.v1_encoder, 'max_seq_length'),
             embed_dim=None,  # Will be inferred from embeddings
             license=None,
             open_weights=False,
-            public_training_code=False,
-            public_training_data=False,
-            framework=["PyTorch"],  # Assuming PyTorch based on your encoder
+            public_training_code=None,
+            public_training_data=None,
+            framework=["PyTorch"],  
             similarity_fn_name="cosine",
-            use_instructions=False,
-            training_datasets={},
+            use_instructions=False, 
+            training_datasets={'placeholder': 'none'},  
         )
     
     def __getattr__(self, name):
