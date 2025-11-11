@@ -132,7 +132,7 @@ TASK_LIST = (
 # ============================================================================
 
 import numpy as np
-from mteb.model_meta import ModelMeta
+from mteb.models.model_meta import ModelMeta
 
 class MTEBv2EncoderAdapter:
     """
