@@ -366,7 +366,6 @@ if __name__ == "__main__":
         # else:
         #     model.set_normalize(True)
         
-        breakpoint()
 
     end = time.time()
     print(f"Time taken (mins): {(end-start)/60}")
