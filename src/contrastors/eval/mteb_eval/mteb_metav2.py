@@ -149,9 +149,13 @@ for ds_name, res_dict in sorted(all_results.items()):
                     )
 
 META_STRING += "\n" + MARKER
-if os.path.exists(f"./{model_name}/mteb_metadata.md"):
-    logger.warning("Overwriting mteb_metadata.md")
-elif not os.path.exists(f"./{model_name}"):
-    os.mkdir(f"./{model_name}")
-with open(f"./{model_name}/mteb_metadata.md", "w") as f:
+# Write metadata into the provided results folder (where the JSONs live)
+output_dir = results_folder
+output_path = os.path.join(output_dir, "mteb_metadata.md")
+if os.path.exists(output_path):
+    logger.warning(f"Overwriting {output_path}")
+else:
+    # results_folder should already exist, but ensure it does
+    os.makedirs(output_dir, exist_ok=True)
+with open(output_path, "w", encoding="utf-8") as f:
     f.write(META_STRING)
