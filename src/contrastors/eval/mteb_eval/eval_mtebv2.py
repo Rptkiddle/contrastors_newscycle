@@ -10,7 +10,7 @@ from argparse import ArgumentParser
 # ============================================================================
 import mteb
 from mteb.cache import ResultCache
-from mteb.encoder_interface import PromptType  
+from mteb.types import PromptType 
 
 # Allow running this script directly from the repository (without pip installing).
 # Ensure the repository `src/` directory is on sys.path so `import contrastors...` works.
