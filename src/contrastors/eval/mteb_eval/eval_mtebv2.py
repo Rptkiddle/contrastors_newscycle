@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from argparse import ArgumentParser
-from numpy import np
+import numpy as np
 
 # ============================================================================
 # V2 IMPORTS
