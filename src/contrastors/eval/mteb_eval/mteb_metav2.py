@@ -63,7 +63,7 @@ META_STRING = "\n".join([MARKER, TAGS, MTEB_TAG, HEADER, MODEL, RES])
 
 ONE_TASK = "  - task:\n      type: {}\n    dataset:\n      type: {}\n      name: {}\n      config: {}\n      split: {}\n      revision: {}\n    metrics:"
 ONE_METRIC = "    - type: {}\n      value: {}"
-SKIP_KEYS = ["std", "evaluation_time", "main_score", "threshold"]
+SKIP_KEYS = ["std", "evaluation_time", "main_score", "threshold", "hf_subset", "languages"]
 
 for ds_name, res_dict in sorted(all_results.items()):
     # V2: Get task metadata using new API
@@ -80,55 +80,73 @@ for ds_name, res_dict in sorted(all_results.items()):
         hf_hub_name = "BeIR/cqadupstack"
     
     mteb_type = metadata.type
-    revision = metadata.dataset.get('revision')  # Okay if it's None
+    
+    # V2: dataset_revision is at top level of result dict
+    revision = res_dict.get('dataset_revision')
+    
+    # V2: scores are nested under "scores" key
+    scores_dict = res_dict.get('scores', {})
     
     split = "test"
-    if (ds_name in TRAIN_SPLIT) and ("train" in res_dict):
+    if (ds_name in TRAIN_SPLIT) and ("train" in scores_dict):
         split = "train"
-    elif (ds_name in VALIDATION_SPLIT) and ("validation" in res_dict):
+    elif (ds_name in VALIDATION_SPLIT) and ("validation" in scores_dict):
         split = "validation"
-    elif (ds_name in DEV_SPLIT) and ("dev" in res_dict):
+    elif (ds_name in DEV_SPLIT) and ("dev" in scores_dict):
         split = "dev"
-    elif "test" not in res_dict:
+    elif "test" not in scores_dict:
         logger.info(f"Skipping {ds_name} as split {split} not present.")
         continue
     
-    res_dict = res_dict.get(split)
+    # V2: Each split contains a LIST of score objects
+    split_results = scores_dict.get(split, [])
     
-    # V2: eval_langs now includes script (e.g., 'eng-Latn' instead of 'eng')
-    eval_langs = metadata.eval_langs
+    if not split_results:
+        logger.info(f"Skipping {ds_name} as split {split} is empty.")
+        continue
     
-    for lang in eval_langs:
+    # V2: Process each score object in the list (usually just one for single-language tasks)
+    for score_obj in split_results:
+        # V2: Languages are inside the score object
+        languages = score_obj.get('languages', ['eng-Latn'])
+        hf_subset = score_obj.get('hf_subset', 'default')
+        
+        # Determine language for naming
+        lang = languages[0] if languages else 'eng-Latn'
+        
         mteb_name = f"MTEB {ds_name}"
-        mteb_name += f" ({lang})" if len(eval_langs) > 1 else ""
-        
-        # For English there is no language key if it's the only language
-        test_result_lang = res_dict.get(lang) if len(eval_langs) > 1 else res_dict
-        
-        # Skip if the language was not found but it has other languages
-        if test_result_lang is None:
-            continue
+        # Add language suffix if multilingual
+        mteb_name += f" ({lang})" if len(metadata.eval_langs) > 1 else ""
         
         META_STRING += "\n" + ONE_TASK.format(
             mteb_type, 
             hf_hub_name, 
             mteb_name, 
-            lang if len(eval_langs) > 1 else "default", 
+            lang if len(metadata.eval_langs) > 1 else "default", 
             split, 
             revision
         )
         
-        for metric, score in test_result_lang.items():
+        # V2: Scores are directly in the score object (not nested by language)
+        for metric, score in score_obj.items():
+            if any([x in metric for x in SKIP_KEYS]):
+                continue
+            
             if not isinstance(score, dict):
-                score = {metric: score}
-            for sub_metric, sub_score in score.items():
-                if any([x in sub_metric for x in SKIP_KEYS]):
-                    continue
+                # It's a simple score value
                 META_STRING += "\n" + ONE_METRIC.format(
-                    f"{metric}_{sub_metric}" if metric != sub_metric else metric,
-                    # All MTEB scores are 0-1, multiply them by 100
-                    sub_score * 100,
+                    metric,
+                    score * 100,
                 )
+            else:
+                # It's a nested dict of scores
+                for sub_metric, sub_score in score.items():
+                    if any([x in sub_metric for x in SKIP_KEYS]):
+                        continue
+                    META_STRING += "\n" + ONE_METRIC.format(
+                        f"{metric}_{sub_metric}" if metric != sub_metric else metric,
+                        sub_score * 100,
+                    )
 
 META_STRING += "\n" + MARKER
 if os.path.exists(f"./{model_name}/mteb_metadata.md"):
