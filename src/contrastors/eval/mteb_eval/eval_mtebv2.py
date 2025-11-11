@@ -4,19 +4,19 @@ import logging
 import os
 import time
 from argparse import ArgumentParser
+from numpy import np
 
 # ============================================================================
-# V2 IMPORTS: Clean imports based on actual MTEB v2 structure
+# V2 IMPORTS
 # ============================================================================
 import mteb
 from mteb.cache import ResultCache
-from mteb.types import PromptType 
+from mteb.types import PromptType  
 
 # Allow running this script directly from the repository (without pip installing).
 # Ensure the repository `src/` directory is on sys.path so `import contrastors...` works.
 import os
 import sys
-
 repo_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if repo_src not in sys.path:
     sys.path.insert(0, repo_src)
@@ -30,7 +30,7 @@ logger = logging.getLogger("main")
 os.environ['OPENBLAS_NUM_THREADS'] = '16'
 
 # ============================================================================
-# TASK LISTS: No changes needed
+# TASK LISTS: No changes needed (same tasks as v1)
 # ============================================================================
 TASK_LIST_CLASSIFICATION = [
     "AmazonCounterfactualClassification",
@@ -162,14 +162,13 @@ class MTEBv2EncoderAdapter:
     
     def encode(
         self,
-        inputs,
-        *,
-        task_metadata,
+        inputs,  # DataLoader[BatchedInput] if you want full type hints
+        task_metadata,  # TaskMetadata
         hf_split: str,
         hf_subset: str,
         prompt_type: PromptType | None = None,
         **kwargs,
-    ):
+    ) -> np.ndarray:  # <-- Add return type
         """
         Encode inputs according to MTEB v2 EncoderProtocol.
         
@@ -247,13 +246,13 @@ if __name__ == "__main__":
 
     # ============================================================================
     # V2: Wrap v1 encoder with v2 adapter
-    # This is all you need - just wrap and pass to mteb.evaluate()
+    # Hopefully works - just wrap and pass to mteb.evaluate()
     # ============================================================================
     model = MTEBv2EncoderAdapter(v1_encoder)
     logger.info("Created v2-compatible encoder adapter")
 
     # ============================================================================
-    # TASK PREFIX MAPPING: Preserved from v1 (currently unused)
+    # TASK PREFIX MAPPING: Preserved from v1 (was not actually used there)
     # ============================================================================
     task2prefix = {}
     for task in TASK_LIST_CLASSIFICATION:
