@@ -4,12 +4,15 @@ import logging
 import os
 import time
 from argparse import ArgumentParser
+from typing import Any
 
 # ============================================================================
-# V2 IMPORTS: Added ResultCache for proper result management
+# V2 IMPORTS: Added ResultCache and proper typing for encoder protocol
 # ============================================================================
 import mteb
 from mteb.cache import ResultCache
+from mteb.encoder_interface import PromptType  # Import v2 types
+from mteb.model_meta import ModelMeta
 
 # Allow running this script directly from the repository (without pip installing).
 # Ensure the repository `src/` directory is on sys.path so `import contrastors...` works.
@@ -128,25 +131,54 @@ TASK_LIST = (
 
 
 # ============================================================================
-# V2 NEW: Wrapper class to make v1 encoders compatible with v2
-# UPDATED: Now includes full v2 signature with all parameters
+# V2 NEW: Create a ModelMeta wrapper that properly integrates with MTEB v2
+# This is the CORRECT way to make a custom model work with MTEB v2
 # ============================================================================
-class MTEBv2EncoderWrapper:
+class V1EncoderModelMeta(ModelMeta):
     """
-    Wrapper to make v1 encoders compatible with MTEB v2.
+    ModelMeta wrapper for v1 encoders to work with MTEB v2.
     
-    In v1, encoders had signature: 
-        encode(sentences: list[str], **kwargs)
-    
-    In v2, encoders need signature: 
-        encode(inputs: DataLoader[BatchedInput], task_metadata: TaskMetadata, 
-               hf_split: str, hf_subset: str, prompt_type: PromptType | None = None, **kwargs)
-    
+    MTEB v2 expects models to be loaded through ModelMeta objects.
     This wrapper:
-    1. Accepts a v1-style encoder
-    2. Implements the FULL v2 protocol with all required parameters
-    3. Unpacks the DataLoader to extract text strings
-    4. Passes them to the v1 encoder (which only needs sentences and kwargs)
+    1. Takes a pre-initialized v1 encoder
+    2. Wraps it to be v2-compatible
+    3. Returns it when load_model() is called
+    """
+    
+    def __init__(self, v1_encoder, model_name: str):
+        """
+        Args:
+            v1_encoder: Pre-initialized v1 encoder
+            model_name: Name identifier for the model
+        """
+        self.v1_encoder = v1_encoder
+        self._model_name = model_name
+        
+    def load_model(self, **kwargs) -> Any:
+        """
+        Load and return the v2-compatible wrapped encoder.
+        
+        Returns:
+            V1toV2EncoderAdapter that wraps the v1 encoder
+        """
+        return V1toV2EncoderAdapter(self.v1_encoder)
+    
+    @property
+    def name(self) -> str:
+        return self._model_name
+
+
+class V1toV2EncoderAdapter:
+    """
+    Adapter to make v1 encoders compatible with MTEB v2 EncoderProtocol.
+    
+    This class properly implements the v2 encoder interface by:
+    1. Accepting the full v2 encode() signature
+    2. Unpacking DataLoader batches to extract text
+    3. Passing text to the v1 encoder
+    
+    The key difference from our previous wrapper: This is designed to work
+    with MTEB's internal type checking and protocol requirements.
     """
     
     def __init__(self, v1_encoder):
@@ -156,53 +188,49 @@ class MTEBv2EncoderWrapper:
         """
         self.v1_encoder = v1_encoder
         
-        # Pass through any attributes the original encoder has
-        # This ensures compatibility with MTEB's internal checks
-        if hasattr(v1_encoder, 'model_name'):
-            self.model_name = v1_encoder.model_name
+        # Pass through attributes for compatibility
+        for attr in ['model_name', 'max_seq_length', 'device']:
+            if hasattr(v1_encoder, attr):
+                setattr(self, attr, getattr(v1_encoder, attr))
     
-    def encode(self, inputs, task_metadata=None, hf_split=None, hf_subset=None, 
-               prompt_type=None, **kwargs):
+    def encode(
+        self,
+        inputs,
+        *,
+        task_metadata=None,
+        hf_split: str = None,
+        hf_subset: str = None,
+        prompt_type: PromptType | None = None,
+        **kwargs
+    ):
         """
-        V2 encode method with full signature.
+        V2 encode method with full signature matching EncoderProtocol.
         
         Args:
-            inputs: DataLoader yielding batches in format:
-                    {"text": list[str], "images": list[PIL.Image], ...}
-            task_metadata: Metadata about the task being evaluated (v2 only, not used by v1)
-            hf_split: The split being evaluated (e.g., "test", "dev") (v2 only, not used by v1)
-            hf_subset: The subset being evaluated (v2 only, not used by v1)
-            prompt_type: The prompt type (e.g., "query", "passage") (v2 only, not used by v1)
-            **kwargs: Additional encoding arguments passed through to v1 encoder
+            inputs: DataLoader yielding batches with {"text": list[str], ...}
+            task_metadata: Metadata about the task (v2 only)
+            hf_split: Split being evaluated, e.g., "test", "dev" (v2 only)
+            hf_subset: Subset being evaluated (v2 only)
+            prompt_type: Prompt type like "query" or "passage" (v2 only)
+            **kwargs: Additional arguments for encoding
         
         Returns:
             Array of embeddings
         """
-        # V2 CONVERSION LOGIC:
-        # The DataLoader yields batches of {"text": [...], "images": [...], ...}
-        # We need to unpack all text from all batches into a flat list
+        # Unpack DataLoader to extract all text sentences
         sentences = []
         for batch in inputs:
-            # Each batch is a dict with "text" key containing list of strings
-            # V2 format: batch = {"text": ["sentence1", "sentence2", ...], ...}
             if "text" in batch:
                 sentences.extend(batch["text"])
         
-        # V2 NOTE: The task_metadata, hf_split, hf_subset, and prompt_type parameters
-        # are provided by MTEB v2 but are not used by our v1 encoder.
-        # They're available here if you want to add task-specific logic in the future.
-        
-        # Now call the v1 encoder with the unpacked list of strings
-        # Only pass through the kwargs that the v1 encoder expects
+        # Call v1 encoder with unpacked sentences
+        # V2 metadata parameters are ignored by v1 encoder but available if needed
         embeddings = self.v1_encoder.encode(sentences, **kwargs)
         
         return embeddings
     
     def __getattr__(self, name):
-        """
-        Pass through any other attribute access to the wrapped encoder.
-        This allows the wrapper to behave transparently like the original encoder.
-        """
+        """Pass through attribute access to wrapped encoder."""
         return getattr(self.v1_encoder, name)
 
 
@@ -235,20 +263,21 @@ if __name__ == "__main__":
     # We still create the model the same way as in v1
     # ============================================================================
     if args.hf_model:
-        model = HFEncoder(args.model_name, seq_length=args.seq_length)
+        v1_encoder = HFEncoder(args.model_name, seq_length=args.seq_length)
     else:
-        model = Encoder(
+        v1_encoder = Encoder(
             model_name, seq_length=seq_length, tokenizer_name=tokenizer_name, matryoshka_dim=args.matryoshka_dim
         )
     print(f"Add prefix: {args.add_prefix}")
-    model = STransformer(model, add_prefix=args.add_prefix, binarize=args.binarize)
+    v1_encoder = STransformer(v1_encoder, add_prefix=args.add_prefix, binarize=args.binarize)
 
     # ============================================================================
-    # V2: Wrap the v1 encoder to make it v2-compatible
-    # This allows us to use the existing encoder classes without modifying them
+    # V2: Wrap the v1 encoder using ModelMeta pattern
+    # This is the proper v2 way to integrate custom models
     # ============================================================================
-    model = MTEBv2EncoderWrapper(model)
-    logger.info("Wrapped model in MTEBv2EncoderWrapper for v2 compatibility")
+    model_meta = V1EncoderModelMeta(v1_encoder, model_name=model_name)
+    model = model_meta.load_model()
+    logger.info("Wrapped v1 encoder in v2-compatible adapter")
 
     # ============================================================================
     # TASK PREFIX MAPPING: No changes - preserved as-is (even though not used in loop)
