@@ -4,7 +4,6 @@ import logging
 import os
 import time
 from argparse import ArgumentParser
-import numpy as np
 
 # ============================================================================
 # V2 IMPORTS
@@ -131,29 +130,27 @@ TASK_LIST = (
 # ============================================================================
 # V2: Simple adapter implementing EncoderProtocol
 # ============================================================================
+
+import numpy as np
+from mteb.model_meta import ModelMeta
+
 class MTEBv2EncoderAdapter:
     """
     Adapter to make v1 encoders compatible with MTEB v2 EncoderProtocol.
-    
-    This implements the exact signature required by MTEB v2's EncoderProtocol:
-    - encode(inputs: DataLoader[BatchedInput], *, task_metadata, hf_split, 
-             hf_subset, prompt_type=None, **kwargs)
-    
-    The adapter:
-    1. Accepts v2 format (DataLoader with batched inputs)
-    2. Unpacks batches to extract text sentences
-    3. Calls v1 encoder with list of strings
-    4. Returns embeddings
     """
     
-    def __init__(self, v1_encoder):
+    def __init__(self, v1_encoder, model_name: str = "custom_model", revision: str | None = None, **kwargs):
         """
         Initialize adapter with a v1 encoder.
         
         Args:
             v1_encoder: Encoder with v1 signature encode(sentences: list[str], **kwargs)
+            model_name: Name of the model (for metadata)
+            revision: Revision of the model (for metadata)
         """
         self.v1_encoder = v1_encoder
+        self._model_name = model_name
+        self._revision = revision
         
         # Pass through any attributes the v1 encoder has for compatibility
         for attr in ['model_name', 'max_seq_length', 'device']:
@@ -162,45 +159,71 @@ class MTEBv2EncoderAdapter:
     
     def encode(
         self,
-        inputs,  # DataLoader[BatchedInput] if you want full type hints
-        task_metadata,  # TaskMetadata
+        inputs,
+        *,
+        task_metadata,
         hf_split: str,
         hf_subset: str,
         prompt_type: PromptType | None = None,
         **kwargs,
-    ) -> np.ndarray:  # <-- Add return type
-        """
-        Encode inputs according to MTEB v2 EncoderProtocol.
-        
-        Args:
-            inputs: DataLoader yielding batches with format:
-                    {"text": list[str], "images": list[PIL.Image], ...}
-            task_metadata: Metadata about the task being evaluated
-            hf_split: Split being evaluated (e.g., "test", "dev")
-            hf_subset: Subset being evaluated
-            prompt_type: Type of prompt (e.g., "query", "passage")
-            **kwargs: Additional arguments passed to v1 encoder
-        
-        Returns:
-            Embeddings as numpy array or torch tensor
-        """
-        # Step 1: Unpack the DataLoader to extract all text sentences
-        # The DataLoader yields batches like: {"text": ["sent1", "sent2", ...], ...}
+    ):
+        """Encode inputs according to MTEB v2 EncoderProtocol."""
         sentences = []
         for batch in inputs:
             if "text" in batch:
                 sentences.extend(batch["text"])
         
-        # Step 2: Call the v1 encoder with the list of sentences
-        # The v1 encoder expects: encode(sentences: list[str], **kwargs)
         embeddings = self.v1_encoder.encode(sentences, **kwargs)
-        
-        # Note: task_metadata, hf_split, hf_subset, and prompt_type are v2-specific
-        # parameters that the v1 encoder doesn't use. They're available here if you
-        # want to add task-specific logic in the future (e.g., different handling
-        # based on task type or prompt type).
-        
         return embeddings
+    
+    def similarity(self, embeddings1, embeddings2):
+        """
+        Compute the similarity between two collections of embeddings.
+        
+        Returns a matrix of similarity scores.
+        """
+        # Convert to numpy if needed
+        if not isinstance(embeddings1, np.ndarray):
+            embeddings1 = np.array(embeddings1)
+        if not isinstance(embeddings2, np.ndarray):
+            embeddings2 = np.array(embeddings2)
+        
+        # Compute cosine similarity matrix
+        # Normalize embeddings
+        embeddings1_norm = embeddings1 / np.linalg.norm(embeddings1, axis=1, keepdims=True)
+        embeddings2_norm = embeddings2 / np.linalg.norm(embeddings2, axis=1, keepdims=True)
+        
+        # Compute similarity matrix
+        return np.dot(embeddings1_norm, embeddings2_norm.T)
+    
+    def similarity_pairwise(self, embeddings1, embeddings2):
+        """
+        Compute pairwise similarity between corresponding pairs of embeddings.
+        
+        Returns a vector of similarity scores.
+        """
+        # Convert to numpy if needed
+        if not isinstance(embeddings1, np.ndarray):
+            embeddings1 = np.array(embeddings1)
+        if not isinstance(embeddings2, np.ndarray):
+            embeddings2 = np.array(embeddings2)
+        
+        # Normalize embeddings
+        embeddings1_norm = embeddings1 / np.linalg.norm(embeddings1, axis=1, keepdims=True)
+        embeddings2_norm = embeddings2 / np.linalg.norm(embeddings2, axis=1, keepdims=True)
+        
+        # Compute pairwise cosine similarity
+        return np.sum(embeddings1_norm * embeddings2_norm, axis=1)
+    
+    @property
+    def mteb_model_meta(self):
+        """Return model metadata."""
+        return ModelMeta(
+            name=getattr(self.v1_encoder, 'model_name', self._model_name),
+            revision=self._revision,
+            release_date=None,
+            languages=None,
+        )
     
     def __getattr__(self, name):
         """Pass through any other attribute access to the wrapped v1 encoder."""
