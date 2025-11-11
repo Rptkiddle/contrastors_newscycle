@@ -289,8 +289,7 @@ if __name__ == "__main__":
         # V2: Use mteb.evaluate() - this is the new recommended approach
         mteb.evaluate(
             model,                    # V2: First argument is the model
-            tasks=[task],             # V2: Second argument is tasks (was in MTEB constructor)
-            task_langs=["en"],        # V2: Language filter (was in MTEB constructor)
+            tasks=[task],             # V2: Task name - language filtering not needed here
             eval_splits=eval_splits,  # Same as v1: which splits to evaluate
             output_folder=output_name,  # Same as v1: where to save results
             batch_size=16384,         # Same as v1: batch size for encoding
