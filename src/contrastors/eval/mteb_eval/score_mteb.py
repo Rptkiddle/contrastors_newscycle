@@ -1,4 +1,5 @@
 import sys
+import os
 
 import pandas as pd
 from huggingface_hub.repocard import metadata_load
@@ -296,6 +297,10 @@ df = df.T
 df.reset_index(inplace=True)
 df.columns = ["Dataset", "Score"]
 print(df.to_markdown())
-# write to markdown file
-with open("results.md", "w") as f:
+# write to markdown file in the same directory as the metadata file
+metadata_dir = os.path.dirname(metadata) or "."
+os.makedirs(metadata_dir, exist_ok=True)
+output_path = os.path.join(metadata_dir, "results.md")
+with open(output_path, "w", encoding="utf-8") as f:
     f.write(df.to_markdown())
+print(f"Wrote results to {output_path}")
