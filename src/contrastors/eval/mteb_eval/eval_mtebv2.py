@@ -268,6 +268,8 @@ def parse_args():
     parser.add_argument("--hf_model", action="store_true")
     parser.add_argument("--query_prefix", type=str, default="search_query: ")
     parser.add_argument("--document_prefix", type=str, default="search_document: ")
+    parser.add_argument("--output_dir", type=str, default="results",
+                        help="Directory to write results/cache into (default: results)")
 
     return parser.parse_args()
 
@@ -324,12 +326,28 @@ if __name__ == "__main__":
     # ============================================================================
     # V2: Setup ResultCache for result management
     # ============================================================================
-    cache_path = f"results/{model_name}binarize_{args.binarize}"
+    # Ensure output directory exists and build cache path inside it
+    output_dir = args.output_dir
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Sanitize model_name so absolute paths don't escape the output_dir.
+    # Use basename of the provided model_name; if empty, fall back to replacing
+    # path separators with underscores.
+    if model_name:
+        safe_model_name = os.path.basename(model_name.rstrip("/"))
+        if not safe_model_name:
+            safe_model_name = model_name.replace("/", "_")
+    else:
+        safe_model_name = "model"
+
+    cache_path = os.path.join(output_dir, f"{safe_model_name}_binarize_{args.binarize}")
     if args.matryoshka_dim:
         cache_path += f"_matryoshka_{args.matryoshka_dim}"
-    
+
+    # Ensure the cache directory exists and pass to ResultCache
+    os.makedirs(cache_path, exist_ok=True)
     cache = ResultCache(cache_path=cache_path)
-    logger.info(f"Results will be saved to: {cache_path}")
+    logger.info(f"Results will be saved to: {os.path.abspath(cache_path)}")
 
     # ============================================================================
     # EVALUATION LOOP: v2 changes
