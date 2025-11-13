@@ -77,7 +77,7 @@ datasets:
     objective: 
       type: "triplet"
       columns: ["query", "document", "negatives"]
-
+#UPDATE TO POINT TO CORRECT LOCAL TRAINING BUCKET - 
   - name: "newscycle"
     bucket: "/home/rkiddle/data/02_hard_negatives/125k/shard-{00000..00001}.jsonl.gz"
     query_prefix: "search_query"
