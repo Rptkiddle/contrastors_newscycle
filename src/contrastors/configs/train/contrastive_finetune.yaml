@@ -27,7 +27,8 @@ model_args:
   model_type: "encoder"
   logit_scale: 50
   trainable_logit_scale: false
-  seq_len: 512
+  seq_len: 2048 #ADDED - was missing from repo, declare in paper. 
+  activation_function: "swiglu" #ADDED - was missing from repo, declared in paper. 
   pooling: "mean"
   nomic_encoder: true
   add_prefix: true
