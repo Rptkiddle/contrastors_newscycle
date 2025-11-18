@@ -1,4 +1,4 @@
-"""Example script for benchmarking all datasets constituting the MTEB English leaderboard & average scores"""
+"""MTEB v2 Evaluation Script (adapted from v1)"""
 
 import logging
 import os
@@ -8,9 +8,14 @@ from argparse import ArgumentParser
 # ============================================================================
 # V2 IMPORTS
 # ============================================================================
+import numpy as np
+from typing import Any
 import mteb
 from mteb.cache import ResultCache
 from mteb.types import PromptType  
+
+
+
 
 # Allow running this script directly from the repository (without pip installing).
 # Ensure the repository `src/` directory is on sys.path so `import contrastors...` works.
@@ -29,7 +34,7 @@ logger = logging.getLogger("main")
 os.environ['OPENBLAS_NUM_THREADS'] = '16'
 
 # ============================================================================
-# TASK LISTS: No changes needed (same tasks as v1)
+# TASK LISTS: No changes needed (same task names as v1)
 # ============================================================================
 TASK_LIST_CLASSIFICATION = [
     "AmazonCounterfactualClassification",
@@ -130,12 +135,6 @@ TASK_LIST = (
 # ============================================================================
 # V2: Simple adapter implementing EncoderProtocol
 # ============================================================================
-
-from typing import Any
-import numpy as np
-from mteb.models.model_meta import ModelMeta
-from mteb.types import PromptType
-
 
 class MTEBv2EncoderAdapter:
     """
@@ -358,7 +357,7 @@ if __name__ == "__main__":
         
         # V2: Configure split when getting the task
         eval_splits = ["dev"] if task_name == "MSMARCO" else ["test"]
-        task = mteb.get_task(task_name, eval_splits=eval_splits)
+        task = mteb.get_task(task_name, eval_splits=eval_splits, languages=["eng"])
         logger.info(f"Configured task '{task_name}' with splits: {eval_splits}")
         
         # V2: Evaluate with proper v2 parameters
