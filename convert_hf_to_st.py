@@ -59,9 +59,60 @@ def convert(hf_model_or_path: str, tokenizer_name: str, st_out_dir: str, seq_len
 
     # Wrap with repository's adapter
     adapter = SentenceTransformerModule(model=model, tokenizer=tokenizer, max_seq_length=seq_len, pooling=pooling)
-    module = nn.Sequential(adapter)
 
-    st = SentenceTransformer(modules=module, similarity_fn_name="cosine")
+    # SentenceTransformers expects each module to implement a `save(model_path, ...)` method.
+    # The repository's SentenceTransformerModule doesn't implement save, so create a small
+    # wrapper that delegates forward/tokenize but implements save to write the model weights
+    # and tokenizer into a subfolder so `SentenceTransformer.save()` can persist everything.
+    class STModuleWrapper(nn.Module):
+        def __init__(self, adapter):
+            super().__init__()
+            self.adapter = adapter
+
+        def forward(self, features: dict, **kwargs):
+            return self.adapter.forward(features, **kwargs)
+
+        def tokenize(self, texts, padding=True):
+            return self.adapter.tokenize(texts, padding=padding)
+
+        def save(self, model_path: str, safe_serialization: bool = False):
+            """Save adapter assets into a subfolder under model_path.
+
+            We save the adapter's underlying model state_dict and the tokenizer.
+            """
+            model_path = Path(model_path)
+            subdir = model_path / "0_custom_adapter"
+            subdir.mkdir(parents=True, exist_ok=True)
+
+            # Save model weights (state dict) in CPU
+            try:
+                state = self.adapter.model.state_dict()
+                # ensure tensors on cpu
+                cpu_state = {k: v.cpu() for k, v in state.items()}
+                torch.save(cpu_state, subdir / "pytorch_model.bin")
+            except Exception:
+                # fallback: try torch.save whole model (less ideal)
+                torch.save(self.adapter.model, subdir / "model.pt")
+
+            # Save tokenizer
+            try:
+                self.adapter.tokenizer.save_pretrained(str(subdir))
+            except Exception:
+                pass
+
+            # Minimal metadata for inspection
+            import json
+
+            meta = {
+                "type": "custom_adapter",
+                "pooling": getattr(self.adapter, "pooling", None),
+                "max_seq_length": getattr(self.adapter, "max_seq_length", None),
+            }
+            (subdir / "module_config.json").write_text(json.dumps(meta))
+
+    wrapper = STModuleWrapper(adapter)
+
+    st = SentenceTransformer(modules=[wrapper], similarity_fn_name="cosine")
 
     out_path = Path(st_out_dir)
     out_path.parent.mkdir(parents=True, exist_ok=True)
