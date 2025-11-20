@@ -12,8 +12,7 @@ import numpy as np
 from typing import Any
 import mteb
 from mteb.cache import ResultCache
-from mteb.types import PromptType  
-
+from mteb.types import PromptType, ModelMeta
 
 
 
@@ -251,7 +250,6 @@ class MTEBv2EncoderAdapter:
     def __getattr__(self, name):
         """Pass through attribute access to wrapped encoder."""
         return getattr(self.v1_encoder, name)
-
 
 
 def parse_args():
