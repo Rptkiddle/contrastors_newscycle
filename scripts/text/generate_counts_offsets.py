@@ -12,7 +12,7 @@ Normalization follows the loader's `normalize_url` behavior (keep last 3-4 path
 components) so the produced keys match what the dataset loader expects.
 
 Usage:
-    python scripts/text/generate_counts_offsets.py --shard-pattern '/path/to/shard-{00000..00004}.jsonl.gz' \
+    python scripts/text/generate_counts_offsets.py --shard-pattern '/path/to/shard-{00000..00001}.jsonl.gz' \
         --out-dir /path/to/output_parent_dir
 
 If your pattern uses s3:// or local paths, the script will expand the pattern
