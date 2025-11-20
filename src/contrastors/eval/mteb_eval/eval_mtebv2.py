@@ -12,7 +12,8 @@ import numpy as np
 from typing import Any
 import mteb
 from mteb.cache import ResultCache
-from mteb.types import PromptType, ModelMeta
+from mteb.types import PromptType
+from mteb.models.model_meta import ModelMeta
 
 
 
