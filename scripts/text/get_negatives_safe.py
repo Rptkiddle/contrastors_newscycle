@@ -153,68 +153,26 @@ if __name__ == "__main__":
     index = faiss.index_cpu_to_all_gpus(index, co=co)
     index.add(np.array(d_embed).astype(np.float32))
 
-    # Iteratively retrieve neighbors, skipping any with (near) perfect cosine similarity (==1.0)
-    corpus_size = len(d_embed)
-    # start with a modest expansion factor; we'll grow if needed until we exhaust the corpus
-    k_search = min(corpus_size, max(args.k * 3, args.k + 10))
-    # store per-record selected negative indices
-    selected_negative_indices = [None] * len(dataset)
-    # epsilon threshold for treating cosine similarity as perfect
-    perfect_eps = 1.0 - 1e-6
+    scores, indices = knn_neighbors(q_embed, index, args.batch_size, args.k)
 
-    while True:
-        scores, indices = knn_neighbors(q_embed, index, args.batch_size, k_search)
-
-        all_satisfied = True
-        for i, data in enumerate(dataset):
-            # skip if already have enough negatives
-            if selected_negative_indices[i] is not None and len(selected_negative_indices[i]) >= args.k:
-                continue
-
-            query = data[args.query_key]
-            inxs = indices[i]
-            scs = scores[i]
-            filtered_inx = [] if selected_negative_indices[i] is None else list(selected_negative_indices[i])
-
-            for inx, sc in zip(inxs, scs):
-                # skip invalid results
-                if inx == -1:
-                    continue
-                # skip perfect-similarity matches (likely identical document/embed)
-                if sc >= perfect_eps:
-                    continue
-
-                # skip positives and exact query text matches
-                if isinstance(data[args.document_key], list):
-                    if documents[inx] in data.get('positive_ctxs', []) or documents[inx].get("text") == query:
-                        continue
-                else:
-                    if documents[inx] == data[args.document_key] or documents[inx] == query:
-                        continue
-
-                if inx not in filtered_inx:
+    for i, data in enumerate(tqdm(dataset)):
+        query = data[args.query_key]
+        inxs = indices[i]
+        filtered_inx = []
+        for inx in inxs:
+            if inx == -1:
+                break
+            selected_doc = documents[inx]
+            # assuming this is NQ
+            if isinstance(data[args.document_key], list):
+                if documents[inx] not in data['positive_ctxs'] and documents[inx]["text"] != query:
+                    filtered_inx.append(inx)
+            else:
+                if documents[inx] != data[args.document_key] and documents[inx] != query:
                     filtered_inx.append(inx)
 
-                if len(filtered_inx) >= args.k:
-                    break
-
-            selected_negative_indices[i] = filtered_inx
-            if len(filtered_inx) < args.k:
-                all_satisfied = False
-
-        # stop if all queries satisfied or we've already retrieved the full corpus
-        if all_satisfied or k_search >= corpus_size:
-            break
-
-        # increase search size and retry
-        k_search = min(corpus_size, k_search * 2)
-
-    # finalize negatives, falling back to random sampling if necessary
-    for i, data in enumerate(tqdm(dataset)):
-        filtered_inx = selected_negative_indices[i] or []
         data[args.negatives_key] = [documents[inx][args.document_key] for inx in filtered_inx]
         if len(data[args.negatives_key]) < args.k:
-            # fallback to original random sampling behaviour
             remaining = args.k - len(data[args.negatives_key])
             while True:
                 random_idx = np.random.randint(0, len(documents), size=remaining).tolist()
@@ -223,7 +181,7 @@ if __name__ == "__main__":
                     if random == -1:
                         continue
                     if isinstance(data[args.document_key], list):
-                        if documents[random] not in data.get('positive_ctxs', []) and documents[random].get("text") != query:
+                        if documents[random] not in data['positive_ctxs'] and documents[random]["text"] != query:
                             kept_idxs.append(documents[random])
                     else:
                         if documents[random] != data[args.document_key] and documents[random] != query:
