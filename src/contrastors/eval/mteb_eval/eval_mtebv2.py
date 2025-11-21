@@ -359,6 +359,23 @@ if __name__ == "__main__":
         task = mteb.get_task(task_name, eval_splits=eval_splits, languages=["eng"])
         logger.info(f"Configured task '{task_name}' with splits: {eval_splits}")
         
+        # Ensure the wrapped v1 encoder has the correct prefixes set so they are
+        # actually applied during encoding. STransformer reads attributes like
+        # `query_prefix` / `docoment_prefix`, `add_prefix` and `doc_as_query`.
+        prefixes = task2prefix.get(task_name, {"query": args.query_prefix, "document": args.document_prefix})
+        try:
+            # Adapter wraps the original v1 encoder as `v1_encoder`.
+            if hasattr(model, "v1_encoder"):
+                setattr(model.v1_encoder, "query_prefix", prefixes["query"])
+                setattr(model.v1_encoder, "docoment_prefix", prefixes["document"])
+                # Preserve behaviour from v1: treat documents as queries for Quora
+                model.v1_encoder.doc_as_query = task_name == "QuoraRetrieval"
+                # Ensure add_prefix matches CLI flag
+                model.v1_encoder.add_prefix = args.add_prefix
+        except Exception:
+            # If something unexpected is wrapped, continue but log.
+            logger.exception("Failed to set prefixes on wrapped encoder; continuing without prefixing")
+
         # V2: Evaluate with proper v2 parameters
         results = mteb.evaluate(
             model,                                    # Custom model implementing EncoderProtocol
