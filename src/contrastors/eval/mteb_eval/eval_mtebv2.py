@@ -372,6 +372,7 @@ if __name__ == "__main__":
                 model.v1_encoder.doc_as_query = task_name == "QuoraRetrieval"
                 # Ensure add_prefix matches CLI flag
                 model.v1_encoder.add_prefix = args.add_prefix
+                print(f"Set prefixes for task {task_name}: query='{prefixes['query']}', document='{prefixes['document']}'")
         except Exception:
             # If something unexpected is wrapped, continue but log.
             logger.exception("Failed to set prefixes on wrapped encoder; continuing without prefixing")
