@@ -250,10 +250,12 @@ def main():
     from sentence_transformers import SentenceTransformer
     from sentence_transformers.models import Transformer, Pooling, Normalize
 
+    # trust_remote_code must be passed via model_args for custom architectures
+    model_args = {"trust_remote_code": True} if args.trust_remote_code else {}
     transformer = Transformer(
         str(work_dir), 
         max_seq_length=max_seq_length,
-        trust_remote_code=args.trust_remote_code
+        model_args=model_args
     )
     
     # Verify embedding dimension matches config
