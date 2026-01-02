@@ -8,21 +8,30 @@ or explicitly provided via CLI arguments.
 
 Required in HF trunk:
   - config.json with max_position_embeddings (or n_positions/max_seq_length) and hidden_size
-  - Tokenizer files (tokenizer.json, tokenizer_config.json, vocab.txt, etc.)
   - Model weights (model.safetensors or pytorch_model.bin)
+  - Tokenizer files (tokenizer.json, tokenizer_config.json, vocab.txt, etc.)
+    OR use --tokenizer-from to copy from another HF repo
 
 Required CLI arguments:
   - --pooling: Pooling mode (mean, cls, max, mean_sqrt_len, weightedmean, lasttoken)
   - --normalize / --no-normalize: Whether to add normalization layer
 
 Usage examples:
+  # Basic conversion with tokenizer in the model folder
   python convert_hf_to_st.py --input /path/to/hf_trunk --out /path/to/st_output --pooling mean --normalize
 
+  # Conversion fetching tokenizer from a reference model
+  python convert_hf_to_st.py --input rptkiddle/NewsCycle_inter_125k --from-hub \\
+      --tokenizer-from nomic-ai/nomic-embed-text-v1 \\
+      --out ./NewsCycle_st --pooling mean --normalize --trust-remote-code
+
+  # With push to Hub
   python convert_hf_to_st.py --input /path/to/hf_trunk --out /path/to/st_output --pooling mean --normalize \\
       --push --repo-id username/model-name --private
 """
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -32,6 +41,10 @@ def parse_args():
     p.add_argument("--input", required=True, help="Path to local HF model folder (or HF repo id if --from-hub)")
     p.add_argument("--from-hub", action="store_true", help="Treat --input as a HF repo id and download it locally before conversion")
     p.add_argument("--out", default=None, help="Output folder for the SentenceTransformers model (defaults to <input>_sentence_transformers)")
+    
+    # Tokenizer source
+    p.add_argument("--tokenizer-from", default=None, 
+                   help="HF repo id to copy tokenizer files from if missing in input (e.g., nomic-ai/nomic-embed-text-v1)")
     
     # Required architectural decisions (cannot be inferred from HF trunk)
     p.add_argument("--pooling", required=True, choices=["mean", "cls", "max", "mean_sqrt_len", "weightedmean", "lasttoken"],
@@ -93,18 +106,87 @@ def get_hidden_size(config: dict) -> int:
     )
 
 
-def validate_tokenizer_files(hf_path: Path):
-    """Check that tokenizer files exist. Raises if missing."""
-    tok_files = ["tokenizer.json", "tokenizer_config.json", "vocab.txt", "vocab.json", "merges.txt"]
-    found = [f for f in tok_files if (hf_path / f).exists()]
+# Standard tokenizer files that SentenceTransformers / Transformers expect
+TOKENIZER_FILES = [
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.txt",
+    "vocab.json",
+    "merges.txt",
+    "special_tokens_map.json",
+    "added_tokens.json",
+]
+
+
+def check_tokenizer_files(hf_path: Path) -> list[str]:
+    """Check which tokenizer files exist. Returns list of found files."""
+    found = [f for f in TOKENIZER_FILES if (hf_path / f).exists()]
+    return found
+
+
+def fetch_tokenizer_from_repo(source_repo: str, dest_path: Path) -> list[str]:
+    """Download tokenizer files from a HF repo to the destination path.
     
-    if not found:
+    Returns list of files that were downloaded.
+    """
+    from huggingface_hub import hf_hub_download, list_repo_files
+    
+    print(f"  Fetching tokenizer files from {source_repo}...")
+    
+    # Get list of files in the source repo
+    try:
+        repo_files = list_repo_files(repo_id=source_repo)
+    except Exception as e:
+        raise RuntimeError(f"Failed to list files in {source_repo}: {e}")
+    
+    # Find which tokenizer files exist in the source repo
+    available_tokenizer_files = [f for f in TOKENIZER_FILES if f in repo_files]
+    
+    if not available_tokenizer_files:
         raise FileNotFoundError(
-            f"No tokenizer files found in {hf_path}. "
-            f"Expected at least one of: {tok_files}"
+            f"No tokenizer files found in {source_repo}. "
+            f"Looked for: {TOKENIZER_FILES}"
         )
     
-    return found
+    downloaded = []
+    for filename in available_tokenizer_files:
+        try:
+            local_path = hf_hub_download(repo_id=source_repo, filename=filename)
+            dest_file = dest_path / filename
+            shutil.copy(local_path, dest_file)
+            downloaded.append(filename)
+            print(f"    - Copied {filename}")
+        except Exception as e:
+            print(f"    - Warning: Failed to download {filename}: {e}")
+    
+    return downloaded
+
+
+def validate_tokenizer_files(hf_path: Path, tokenizer_from: str | None = None) -> list[str]:
+    """Check that tokenizer files exist. 
+    
+    If missing and tokenizer_from is provided, fetch from that repo.
+    Raises if missing and no source provided.
+    """
+    found = check_tokenizer_files(hf_path)
+    
+    if found:
+        return found
+    
+    # No tokenizer files found locally
+    if tokenizer_from:
+        downloaded = fetch_tokenizer_from_repo(tokenizer_from, hf_path)
+        if downloaded:
+            return downloaded
+        raise FileNotFoundError(
+            f"Failed to download any tokenizer files from {tokenizer_from}"
+        )
+    
+    raise FileNotFoundError(
+        f"No tokenizer files found in {hf_path}. "
+        f"Expected at least one of: {TOKENIZER_FILES}. "
+        f"Use --tokenizer-from to copy tokenizer from another HF repo."
+    )
 
 
 def validate_model_weights(hf_path: Path):
@@ -132,7 +214,7 @@ def main():
         from huggingface_hub import snapshot_download
         print(f"Downloading {args.input} from HF hub... (this may take a while)")
         work_dir = Path(snapshot_download(repo_id=args.input, allow_patterns=["*"], local_dir_use_symlinks=False))
-        print("Downloaded to", work_dir)
+        print(f"Downloaded to {work_dir}")
     else:
         if not input_path.exists():
             print(f"Error: Input path {input_path} not found", file=sys.stderr)
@@ -145,11 +227,12 @@ def main():
     config = load_config(work_dir)
     print(f"  - Found config.json")
     
-    tokenizer_files = validate_tokenizer_files(work_dir)
-    print(f"  - Found tokenizer files: {tokenizer_files}")
-    
     weight_files = validate_model_weights(work_dir)
     print(f"  - Found weight files: {weight_files}")
+    
+    # Check/fetch tokenizer files (this may download from --tokenizer-from if needed)
+    tokenizer_files = validate_tokenizer_files(work_dir, args.tokenizer_from)
+    print(f"  - Tokenizer files ready: {tokenizer_files}")
     
     # Extract required parameters from config
     max_seq_length = args.max_seq_len if args.max_seq_len else get_max_seq_length(config)
@@ -167,8 +250,11 @@ def main():
     from sentence_transformers import SentenceTransformer
     from sentence_transformers.models import Transformer, Pooling, Normalize
 
-    model_args = {"trust_remote_code": True} if args.trust_remote_code else {}
-    transformer = Transformer(str(work_dir), max_seq_length=max_seq_length, model_args=model_args)
+    transformer = Transformer(
+        str(work_dir), 
+        max_seq_length=max_seq_length,
+        trust_remote_code=args.trust_remote_code
+    )
     
     # Verify embedding dimension matches config
     emb_dim = transformer.get_word_embedding_dimension()
