@@ -39,7 +39,7 @@ model_args:
 
 
 data_args:
-  input_shards: "configs/data/finetune_triplets_news.yaml"
+  input_shards: "configs/data/finetune_triplets.yaml"
   workers: 4 
   batch_size: 256
   seed: 42
