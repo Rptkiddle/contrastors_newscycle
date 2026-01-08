@@ -3,6 +3,7 @@ Merges CQADupstack subset results
 Usage: python merge_cqadupstack.py path_to_results_folder
 """
 
+import argparse
 import glob
 import json
 import logging
@@ -35,9 +36,23 @@ NOAVG_KEYS = [
 ]
 
 
-results_folder = sys.argv[1]
+
+parser = argparse.ArgumentParser(description="Merge CQADupstack subset results in a folder.")
+parser.add_argument("results_folder", help="Path to folder containing CQADupstack JSON files")
+parser.add_argument(
+    "-o",
+    "--output",
+    help=(
+        "Path to write merged JSON. If omitted, writes `CQADupstackRetrieval.json` inside the results folder."
+    ),
+    default=None,
+)
+args = parser.parse_args()
+results_folder = args.results_folder.rstrip(os.sep)
+
 # Ensure at least 1 character btw CQADupstack & Retrieval
-files = glob.glob(f'{results_folder}/CQADupstack*?*Retrieval.json')
+glob_path = os.path.join(results_folder, "CQADupstack*?*Retrieval.json")
+files = glob.glob(glob_path)
 
 logger.info(f"Found CQADupstack files: {files}")
 
@@ -60,8 +75,21 @@ if len(files) == len(TASK_LIST_CQA):
                     all_results[split][metric] = score
     all_results["mteb_dataset_name"] = "CQADupstackRetrieval"
 
-    logger.info("Saving ", all_results)
-    with open(os.path.join(results_folder, "CQADupstackRetrieval.json"), "w", encoding="utf-8") as f:
+    # Determine output file
+    if args.output:
+        output_file = os.path.abspath(args.output)
+    else:
+        output_file = os.path.join(results_folder, "CQADupstackRetrieval.json")
+
+    if os.path.exists(output_file):
+        logger.warning(f"Overwriting {output_file}")
+    else:
+        out_dir = os.path.dirname(output_file)
+        if out_dir and not os.path.exists(out_dir):
+            os.makedirs(out_dir, exist_ok=True)
+
+    logger.info("Saving merged results to %s", output_file)
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=4)
 else:
     logger.warning(

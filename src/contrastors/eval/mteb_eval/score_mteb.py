@@ -1,3 +1,4 @@
+import argparse
 import sys
 import os
 
@@ -243,7 +244,30 @@ datasets = (
     + TASK_LIST_STS
     + TASK_LIST_SUMMARIZATION
 )
-metadata = sys.argv[1]
+parser = argparse.ArgumentParser(description="Score MTEB metadata and write a results markdown.")
+parser.add_argument("metadata", help="Path to metadata file or directory containing mteb_metadata.md")
+parser.add_argument(
+    "-o",
+    "--output",
+    help="Path to write the results markdown. If omitted, writes `results.md` next to the metadata file.",
+    default=None,
+)
+args = parser.parse_args()
+
+metadata = args.metadata
+if os.path.isdir(metadata):
+    # prefer mteb_metadata.md inside directory
+    candidate = os.path.join(metadata, "mteb_metadata.md")
+    if os.path.exists(candidate):
+        metadata = candidate
+    else:
+        # fall back to any .md in directory
+        mds = [p for p in os.listdir(metadata) if p.endswith(".md")]
+        if mds:
+            metadata = os.path.join(metadata, mds[0])
+        else:
+            raise FileNotFoundError(f"No metadata .md file found in directory {metadata}")
+
 meta = metadata_load(metadata)
 
 task_results = [
@@ -297,10 +321,18 @@ df = df.T
 df.reset_index(inplace=True)
 df.columns = ["Dataset", "Score"]
 print(df.to_markdown())
-# write to markdown file in the same directory as the metadata file
-metadata_dir = os.path.dirname(metadata) or "."
-os.makedirs(metadata_dir, exist_ok=True)
-output_path = os.path.join(metadata_dir, "results.md")
+# determine output path
+if args.output:
+    output_path = args.output
+else:
+    metadata_dir = os.path.dirname(metadata) or "."
+    output_path = os.path.join(metadata_dir, "results.md")
+
+out_dir = os.path.dirname(output_path)
+if out_dir and not os.path.exists(out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+if os.path.exists(output_path):
+    print(f"Overwriting {output_path}")
 with open(output_path, "w", encoding="utf-8") as f:
     f.write(df.to_markdown())
 print(f"Wrote results to {output_path}")

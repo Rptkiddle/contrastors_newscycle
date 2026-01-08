@@ -23,6 +23,7 @@ model-index:
 ---
 """
 
+import argparse
 import json
 import logging
 import os
@@ -34,8 +35,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-results_folder = sys.argv[1].rstrip("/")
-model_name = results_folder.split("/")[-1]
+parser = argparse.ArgumentParser(description="Create MTEB metadata from results folder.")
+parser.add_argument("results_folder", help="Path to folder containing JSON result files")
+parser.add_argument(
+    "-o",
+    "--output",
+    help=(
+        "Path to write metadata file. If omitted, the file `mteb_metadata.md` is created inside the provided "
+        "results folder."
+    ),
+    default=None,
+)
+args = parser.parse_args()
+results_folder = args.results_folder.rstrip(os.sep)
+model_name = os.path.basename(os.path.normpath(results_folder))
+
+if args.output:
+    output_file = os.path.abspath(args.output)
+else:
+    output_file = os.path.join(results_folder, "mteb_metadata.md")
 
 all_results = {}
 
@@ -128,9 +146,12 @@ for ds_name, res_dict in sorted(all_results.items()):
                 )
 
 META_STRING += "\n" + MARKER
-if os.path.exists(f"./{model_name}/mteb_metadata.md"):
-    logger.warning("Overwriting mteb_metadata.md")
-elif not os.path.exists(f"./{model_name}"):
-    os.mkdir(f"./{model_name}")
-with open(f"./{model_name}/mteb_metadata.md", "w") as f:
+if os.path.exists(output_file):
+    logger.warning(f"Overwriting {output_file}")
+else:
+    out_dir = os.path.dirname(output_file)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+with open(output_file, "w", encoding="utf-8") as f:
     f.write(META_STRING)
+logger.info(f"Wrote metadata to {output_file}")
