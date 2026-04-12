@@ -1,10 +1,16 @@
 from .base import *
-from .glue import *
+try:
+    from .glue import *
+except ImportError:
+    pass
 try:
     from .image_text import *
 except ImportError:
     pass
-from .mlm import *
+try:
+    from .mlm import *
+except ImportError:
+    pass
 from .text_text import *
 try:
     from .mmlm import *
