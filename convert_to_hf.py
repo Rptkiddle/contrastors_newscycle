@@ -37,4 +37,4 @@ if __name__ == "__main__":
         config = NomicBertConfig.from_pretrained(args.ckpt_path)
         model = NomicBertForPreTraining.from_pretrained(args.ckpt_path, config=config)
 
-    model.push_to_hub(args.model_name, private=args.private, use_temp_dir=False)
+    model.save_pretrained(args.model_name)  # save locally (push_to_hub removed in transformers 5.x)
