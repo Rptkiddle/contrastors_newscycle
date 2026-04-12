@@ -400,8 +400,8 @@ class LlamaAttention(nn.Module):
 
             assert attention_mask is not None
 
-            unpadded_kv, indices_k, cu_seqlens_k, max_seqlen_k = unpad_input(kv, attention_mask)
-            unpadded_q, indices_q, cu_seqlens_q, max_seqlen_q = unpad_input(q, attention_mask)
+            unpadded_kv, indices_k, cu_seqlens_k, max_seqlen_k, *_ = unpad_input(kv, attention_mask)
+            unpadded_q, indices_q, cu_seqlens_q, max_seqlen_q, *_ = unpad_input(q, attention_mask)
             attn_outputs = flash_attn_varlen_kvpacked_func(
                 unpadded_q,
                 unpadded_kv,
