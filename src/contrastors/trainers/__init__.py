@@ -1,17 +1,16 @@
 from .base import *
 from .glue import *
-from .image_text import *
+try:
+    from .image_text import *
+except ImportError:
+    pass
 from .mlm import *
 from .text_text import *
-from .mmlm import *
-from .distill import *
-
-TRAINER_REGISTRY = {
-    "mlm": MLMTrainer,
-    "mmlm": MMLMTrainer,
-    "glue": GlueTrainer,
-    "encoder": TextTextTrainer,
-    "clip": ImageTextTrainer,
-    "locked_text": ImageTextTrainer,
-    "distill": DistillTrainer,
-}
+try:
+    from .mmlm import *
+except ImportError:
+    pass
+try:
+    from .distill import *
+except ImportError:
+    pass
