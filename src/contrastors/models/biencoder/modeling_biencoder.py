@@ -153,7 +153,8 @@ class MultiHeadAttentionPooling(nn.Module):
 
 
 class BiEncoder(PreTrainedModel):
-    _tied_weights_keys = {}  # compat: transformers 5.x requires this for post_init()
+    _tied_weights_keys = {}  # compat: transformers 5.x
+    all_tied_weights_keys = {}  # compat: transformers 5.x requires this for from_pretrained()
     def __init__(self, config):
         super().__init__(config)
 
