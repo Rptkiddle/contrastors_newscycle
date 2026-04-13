@@ -250,12 +250,17 @@ def main():
     from sentence_transformers import SentenceTransformer
     from sentence_transformers.models import Transformer, Pooling, Normalize
 
-    # trust_remote_code must be passed via model_args for custom architectures
-    model_args = {"trust_remote_code": True} if args.trust_remote_code else {}
+    # trust_remote_code must be propagated to all three load paths in
+    # sentence-transformers 3.x (model_args, config_args, tokenizer_args are
+    # separate kwargs). Without config_args, AutoConfig.from_pretrained falls
+    # through to an interactive input() prompt that fails in batch mode.
+    trust_kwargs = {"trust_remote_code": True} if args.trust_remote_code else {}
     transformer = Transformer(
-        str(work_dir), 
+        str(work_dir),
         max_seq_length=max_seq_length,
-        model_args=model_args
+        model_args=trust_kwargs,
+        config_args=trust_kwargs,
+        tokenizer_args=trust_kwargs,
     )
     
     # Verify embedding dimension matches config
