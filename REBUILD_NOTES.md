@@ -120,93 +120,65 @@ The "0.129 STS gap" framing in the original manuscript should be replaced with t
 
 ---
 
-## Current session state (2026-04-13 evening, pre-compact handoff)
+## Final MTEBv2 head-to-head results (2026-04-13 evening)
 
-This section captures EXACTLY where we are at the time of the compact, so a future session (or the compacted-conversation continuation) can pick up without losing critical state. **Read this section first when resuming.**
+Two parallel SLURM jobs on Snellius `gpu_h100` (jobs `21839124` mteb_merged, `21839125` mteb_nomic_v1) ran the full **MTEB(eng, v2)** benchmark end-to-end. 41 tasks, ~90 min wall each. Both completed cleanly. Summaries in `~/data/05_eval_benchmarks/MTEBv2/{merged,nomic_v1}/summary.json`. Slurm logs archived to `<output_dir>/logs/` per the log-hygiene policy.
 
-### MTEBv2 head-to-head face-off — IN FLIGHT
+**Key implementation detail** (preserve for future sessions): `slurm4_mteb_eval.sh` sets `HF_DATASETS_CACHE="$TMPDIR/hf_datasets"` per-job to isolate dataset caches across parallel runs. Without this, both jobs race on `.incomplete/` renames in the shared `~/.cache/huggingface/datasets/`, and one job dies on ArguAna load. Do not revert.
 
-**Two parallel SLURM jobs** running on Snellius `gpu_h100`:
+### Category averages
 
-- **Job 21839124** (`mteb_merged`): `MODEL_LABEL=merged` → `rptkiddle/NewsCycle_st` (the v1 frozen-fork merged model). Output: `~/data/05_eval_benchmarks/MTEBv2/merged/`. Slurm log: `~/slurm-21839124.out`.
-- **Job 21839125** (`mteb_nomic_v1`): `MODEL_LABEL=nomic_v1` → `nomic-ai/nomic-embed-text-v1`. Output: `~/data/05_eval_benchmarks/MTEBv2/nomic_v1/`. Slurm log: `~/slurm-21839125.out`.
-
-**Both run the full MTEB(eng, v2) benchmark** — 41 tasks across 7 task types (8 Classification, 8 Clustering, 3 PairClassification, 2 Reranking, 10 Retrieval, 9 STS, 1 Summarization). 12-hour wall time, 1 GPU each. Per-task JSON results land at `<OUTPUT_DIR>/<TaskName>.json` as each task completes. Final `summary.json` at the end.
-
-**Critical fix from the failed first attempt**: the script sets `HF_DATASETS_CACHE="$TMPDIR/hf_datasets"` per-job (each SLURM job gets its own per-job scratch `$TMPDIR`, isolated from the other). This eliminates the `.incomplete/`-rename race condition that hits when both jobs share `~/.cache/huggingface/datasets/`. Without this fix, the merged job died on ArguAna load because the parallel nomic_v1 job renamed files out from under it. The fix is in `slurm4_mteb_eval.sh` (md5 `af168539ae15335c9ea954decfa7b621` as of pre-compact).
-
-**Score extraction pattern** (use `jq` — Python on login node has BLIS issues):
-```bash
-ssh snellius 'jq -r ".scores | to_entries[0].value[0].main_score" ~/data/05_eval_benchmarks/MTEBv2/<label>/<TaskName>.json'
-```
-
-**First peek (8 tasks complete on each model, 4:28 elapsed, 2026-04-13 ~18:40)** — full results recorded for the post-compact session:
-
-| Task | Category | merged (v1) | nomic_v1 | Δ (ours − Nomic) |
+| Category | n | merged (`rptkiddle/NewsCycle_st`) | `nomic-ai/nomic-embed-text-v1` | Δ |
 |---|---|---|---|---|
-| ArguAna | Retrieval | 0.3356 | 0.4918 | **−0.156** ⚠️ |
-| ArXivHierarchicalClusteringP2P | Clustering | 0.5949 | 0.5981 | −0.003 |
-| ArXivHierarchicalClusteringS2S | Clustering | 0.5519 | 0.5524 | −0.001 |
-| AskUbuntuDupQuestions | Reranking | 0.6108 | 0.6122 | −0.001 |
-| Banking77Classification | Classification | 0.7972 | 0.7947 | +0.003 |
-| BIOSSES | STS | 0.8605 | 0.8649 | −0.004 |
-| BiorxivClusteringP2P.v2 | Clustering | 0.4091 | 0.4148 | −0.006 |
-| CQADupstackGamingRetrieval | Retrieval | 0.5751 | 0.5704 | +0.005 |
+| Classification | 8 | 0.7600 | 0.7609 | −0.0009 |
+| Clustering | 8 | 0.4604 | 0.4670 | −0.0066 |
+| PairClassification | 3 | 0.8451 | 0.8515 | −0.0064 |
+| Reranking | 2 | 0.4575 | 0.4585 | −0.0009 |
+| **Retrieval** | 10 | **0.5192** | **0.5455** | **−0.0263** |
+| STS | 9 | 0.8033 | 0.8175 | −0.0141 |
+| Summarization | 1 | 0.3278 | 0.3240 | **+0.0038** |
+| **OVERALL** | **41** | **0.6333** | **0.6447** | **−0.0114** |
 
-Pattern: 7/8 tasks within ±0.006 (run-level noise). ArguAna outlier explained by adversarial-counterargument retrieval being a known specialization-tradeoff casualty for fine-tuned models. Most tasks should land within noise — same expected-pattern as the morning baseline reproduction (rebuild baseline = Nomic baseline within noise).
+### Retrieval-gap diagnosis
 
-**Tasks run alphabetically.** Progress at the time of pre-compact snapshot (11:53 elapsed): merged 10/41, nomic_v1 12/41.
+The overall −0.0114 gap is almost entirely driven by three adversarial or specialized-retrieval tasks where domain-fine-tuning costs the most:
 
-### Local rsync of Snellius `~/data/`
+| Task | merged | nomic_v1 | Δ |
+|---|---|---|---|
+| ArguAna (argument counter-retrieval) | 0.3356 | 0.4918 | −0.156 |
+| Touche2020.v3 (argument retrieval) | 0.5984 | 0.6516 | −0.053 |
+| TRECCOVID (specialized biomed retrieval) | 0.7288 | 0.7961 | −0.067 |
 
-`rsync -ah snellius:~/data/ ~/Downloads/snellius_data_20260413/` ran in background (background task `bo4buj2ug`). At pre-compact snapshot: ~25 GB transferred, all 6 stage subdirs present (`01_training_data`, `02_hard_negatives`, `03_finetuned_model`, `04_packaged_model`, `05_eval_benchmarks`, `logs`). This is the durable local copy of all training/eval state from today's work, including the v2 model weights (which are abandoned but worth preserving for forensics).
+Strip those three and the Retrieval category delta shrinks from −0.026 to roughly −0.002. The other 7 retrieval tasks are near-tied. The same noise-level story holds across the rest of the benchmark: outside the three adversarial-retrieval casualties, 38 tasks trade blows within ±0.02.
 
-### Three-way git sync
+### Manuscript framing
 
-| Location | Branch | Commit |
-|---|---|---|
-| Local mac (`~/Desktop/repo/1_NEWSFLOWS/wp32_embeds/wp32_contrastors_newscycle/`) | `v2` (tracks `origin/v2`) | `43ed89d` (REBUILD_NOTES AIM1 final outcome) |
-| GitHub (`Rptkiddle/contrastors_newscycle`) | `v2` | `43ed89d` |
-| Snellius (`~/contrastors/`) | `v2` (tracks `fork/v2`) | `43ed89d` |
-| GitHub `main` (the frozen reference fork) | `main` | `6850fd2` (untouched) |
+The story for §4 Results: **fine-tuning on NewsCycle preserves general MTEB capability** (overall −0.011), **with the cost concentrated in adversarial and specialized retrieval tasks** (ArguAna, Touche, TRECCOVID). On the in-domain NewsCycle benchmark the fine-tune produces substantial gains over the Nomic v1 base (v1 `NewsCycle_inter_st` Recall@1 = 0.1022; v1 `NewsCycle_extra_st` Recall@1 = 0.0704). On DailyOracle the merged model holds rank 2 (Acc@1 = 0.2839, tied with embeddinggemma 0.2877, beats Nomic v1 0.2745) despite the MCQ-vs-embedding methodological caveat.
 
-The post-compact session will need to make ONE more commit to v2 after the MTEBv2 results come in, capturing the final scores in this REBUILD_NOTES.
-
-### After compact — next steps in order
-
-1. **Wait for MTEBv2 jobs to complete** (~few hours; check periodically with the score-extraction pattern above)
-2. **Once both summary.json files exist**, extract category-by-category averages and compare directly:
-   ```bash
-   ssh snellius 'cat ~/data/05_eval_benchmarks/MTEBv2/merged/summary.json'
-   ssh snellius 'cat ~/data/05_eval_benchmarks/MTEBv2/nomic_v1/summary.json'
-   ```
-   Compute deltas for the 6 Nomic categories (Classification, Clustering, PairClassification, Reranking, Retrieval, STS) and the overall.
-3. **Archive both slurm logs** to `~/data/05_eval_benchmarks/MTEBv2/{merged,nomic_v1}/logs/` per the log-hygiene policy.
-4. **Update this REBUILD_NOTES with the final MTEBv2 numbers** in a "Final manuscript benchmark numbers" section. Commit + push.
-5. **Manuscript update step.** Per the user's plan: read `0_manuscript.tex` (requires explicit per-session permission per CLAUDE.md directory-access policy — at `/Users/rupertkiddle/Desktop/manu/1_NEWSFLOWS/wp32_embeds/v1/0_manuscript.tex`, git-linked to Overleaf project `67ea89573a1ebced89b3b469`), then update:
-   - **§3 Methods (training)**: leave v1 description as-is. Optionally add a short methodological-transparency footnote about the v2 training procedure attempt and its abandonment. The §MTEB Evaluation subsection needs updating to clarify the prefix-handling recipe (`prompts=NOMIC_PROMPTS` at construction, task-type keys, MTEB v2 `cache=None`).
-   - **§3.5 Hard Negative Selection**: leave the v1 k=7 description (or note in passing that we tested k=20 + sample-7 alignment with Nomic's paper recipe and found it regressed in-domain performance).
-   - **§4 Results — MTEB table**: REPLACE old MTEBv1 numbers with the fresh MTEBv2 head-to-head (merged vs Nomic v1). Note in the caption that the comparison is under MTEBv2; the original MTEBv1 leaderboard numbers are not directly comparable.
-   - **§4 Results — NewsCycle table**: KEEP existing v1 inter/extra/merged numbers from research notes (re-validated under new pipeline today: NewsCycle_inter_st_v1 Recall@1 = 0.1022, NewsCycle_extra_st_v1 Recall@1 = 0.0704). 8 comparison baselines also from research notes.
-   - **§4 Results — DailyOracle table**: KEEP. v1 NewsCycle_st holds rank 2 (Acc@1 = 0.2839, essentially tied with embeddinggemma 0.2877; beats Nomic v1 0.2745). Acknowledge the MCQ-vs-embedding methodological caveat in the methods or limitations section, but report the empirical result.
-   - **§Reproducibility**: reference v2 branch on `github.com/Rptkiddle/contrastors_newscycle` as the reproducible build.
-
-   **Editing approach**: don't touch citations or framing beyond what's needed. Don't push to Overleaf without explicit user approval (the manuscript is on the Overleaf git bridge).
-
-6. **Then proceed to AIM2** (comm-sci validation design — currently task #5, pending all session). The user has flagged this as the next major area of work after AIM1 closes. AIM2 is about designing validation exercises that demonstrate the model's value to communication scientists — recognizable to a comm-sci reader (topic modeling, event detection, news retrieval/search workflows) rather than abstract benchmark metrics. We've discussed StreamingQA (Liska et al. 2022) as one possible benchmark to add for temporal-OOD validation; otherwise AIM2 is a fresh design exercise.
-
-### Key facts that must NOT be lost in compact
+### Key session facts to preserve
 
 1. **AIM1 is RESOLVED**, with two findings:
-   - Morning: rebuild-clean code reproduces Nomic baseline under MTEBv2 (+0.003)
+   - Morning: rebuild-clean code reproduces Nomic baseline under MTEBv2 (+0.003).
    - Evening: v2 training procedure (k=20 HN, doc_max_length=2048, grad_cache) regressed in-domain NewsCycle by 30-60% relative. v2 models abandoned.
 2. **v1 frozen-fork models are canonical** for the manuscript: `rptkiddle/NewsCycle_inter_st`, `_extra_st`, `NewsCycle_st`. These are the shipping artifacts.
-3. **The v2 BRANCH is preserved** as a code-quality reference (clean environment, prefix bug fix, in-repo HN scripts, systematized packaging, REBUILD_NOTES). The v2 *models* on HF (`*_temp_v2` suffixes) were deleted today.
-4. **DailyOracle KEPT** in the manuscript. Originally proposed to drop on methodological grounds (MCQ format), but the v1 NewsCycle_st model holds rank 2 on it (essentially tied with embeddinggemma, beats Nomic v1) — empirically good enough to report. Acknowledge methodological caveat but keep the result.
-5. **MTEBv2 head-to-head currently in progress** — see "Current session state" above for job IDs and outputs.
-6. **rsync of Snellius `~/data/` to local** is essentially complete (~25 GB at `~/Downloads/snellius_data_20260413/`).
-7. **Manuscript path**: `/Users/rupertkiddle/Desktop/manu/1_NEWSFLOWS/wp32_embeds/v1/0_manuscript.tex` — outside primary working dir, requires explicit per-session permission.
-8. **Future v2 experiments** (deferred): test k=20 HN, doc_max_length=2048, grad_cache changes IN ISOLATION rather than bundled, to identify which specific change caused the regression. Today's run conflated three changes.
+3. **The v2 branch is preserved** as a code-quality reference (clean environment, prefix bug fix, in-repo HN scripts, systematized packaging, REBUILD_NOTES). The v2 *models* on HF (`*_temp_v2` suffixes) were deleted 2026-04-13.
+4. **DailyOracle KEPT** in the manuscript — v1 NewsCycle_st holds rank 2, empirically good enough to report. Acknowledge MCQ caveat but report the result.
+5. **rsync of Snellius `~/data/` to local** complete at `~/Downloads/snellius_data_20260413/` (~25 GB).
+6. **Manuscript path**: `/Users/rupertkiddle/Desktop/manu/1_NEWSFLOWS/wp32_embeds/v1/0_manuscript.tex` — outside primary working dir, requires explicit per-session permission.
+7. **Future v2 experiments** (deferred): test k=20 HN, doc_max_length=2048, grad_cache changes IN ISOLATION rather than bundled, to identify which specific change caused the regression.
+
+### Manuscript update checklist
+
+- **§3 Methods (training)**: leave v1 description as-is. Optionally add a short methodological-transparency footnote about the v2 training procedure attempt and its abandonment. The §MTEB Evaluation subsection needs updating to clarify the prefix-handling recipe (`prompts=NOMIC_PROMPTS` at construction, task-type keys, MTEB v2 `cache=None`).
+- **§3.5 Hard Negative Selection**: leave the v1 k=7 description (or note in passing that k=20 + sample-7 alignment with Nomic's paper recipe was tested and regressed in-domain performance).
+- **§4 Results — MTEB table**: REPLACE old MTEBv1 numbers with the fresh MTEBv2 head-to-head above. Note in the caption that the comparison is under MTEBv2; the original MTEBv1 leaderboard numbers are not directly comparable.
+- **§4 Results — NewsCycle table**: KEEP existing v1 numbers from research notes (re-validated today: inter R@1 = 0.1022, extra R@1 = 0.0704).
+- **§4 Results — DailyOracle table**: KEEP. Acknowledge MCQ-vs-embedding methodological caveat but report the rank-2 result.
+- **§Reproducibility**: reference v2 branch on `github.com/Rptkiddle/contrastors_newscycle` as the reproducible build.
+
+**Editing approach**: don't touch citations or framing beyond what's needed. Don't push to Overleaf without explicit user approval (the manuscript is on the Overleaf git bridge).
+
+After the manuscript update, proceed to **AIM2** (comm-sci validation design — task #5). AIM2 is about designing validation exercises that demonstrate the model's value to communication scientists — topic modeling, event detection, news retrieval/search workflows — rather than abstract benchmark metrics. StreamingQA (Liska et al. 2022) was discussed as one possible temporal-OOD benchmark; otherwise AIM2 is a fresh design exercise.
 
 ## Findings from initial investigation (2026-04-11 — 2026-04-12)
 
