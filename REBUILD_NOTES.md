@@ -91,7 +91,7 @@ Three deliberate "alignments with Nomic's published recipe" were applied during 
 
 For the manuscript's results section:
 - **NewsCycle benchmark**: report v1 fork numbers from the user's research notes (`NewsCycle_inter_st`: Recall@1 = 10.22% / MRR = 0.231; `NewsCycle_extra_st`: Recall@1 = 7.04% / MRR = 0.192). These have been independently re-validated under our current eval pipeline today.
-- **DailyOracle**: drop entirely from the manuscript (the MCQ format is methodologically inappropriate for embedding evaluation; even the v1 fork's signal range is only ~4 points above random).
+- **DailyOracle**: KEEP. The v1 frozen-fork merged model holds rank 2 on DailyOracle (Acc@1 = 0.2839, essentially tied with embeddinggemma at 0.2877), and beats Nomic v1 in the same eval pipeline. The MCQ-vs-embedding methodological caveat exists but the empirical result is good for our shipping model. (Originally proposed to drop on methodological grounds; reversed by user 2026-04-13 evening because the v1 result is competitive enough to keep.)
 - **MTEBv2 head-to-head**: run `slurm4_mteb_eval.sh` with `MODEL_LABEL=merged` (= `rptkiddle/NewsCycle_st`, the v1 frozen-fork merged model) vs `MODEL_LABEL=nomic_v1`. Fresh same-day same-pipeline numbers across both models for the manuscript's MTEB table.
 
 ### What `v2` is preserved as
@@ -114,7 +114,7 @@ The **methods section** should describe the v1 production pipeline (the frozen-f
 The **results section** should report:
 - MTEBv2 head-to-head: v1 NewsCycle_st (merged) vs Nomic v1 — to be run after this housekeeping completes
 - NewsCycle (entity-temporal retrieval): v1 inter / extra / merged numbers, plus 8 comparison baselines (already in research notes)
-- (No DailyOracle)
+- DailyOracle MCQ: v1 NewsCycle_st rank 2 (Acc@1 = 0.2839, tied with embeddinggemma 0.2877; beats Nomic v1 0.2745). Acknowledge MCQ-vs-embedding caveat in methods/limitations but report the result.
 
 The "0.129 STS gap" framing in the original manuscript should be replaced with the MTEBv2 head-to-head finding: under MTEBv2, our v1 model is statistically indistinguishable from Nomic v1 on STS, and the original "gap" was a library-version artifact.
 
@@ -188,7 +188,7 @@ The post-compact session will need to make ONE more commit to v2 after the MTEBv
    - **§3.5 Hard Negative Selection**: leave the v1 k=7 description (or note in passing that we tested k=20 + sample-7 alignment with Nomic's paper recipe and found it regressed in-domain performance).
    - **§4 Results — MTEB table**: REPLACE old MTEBv1 numbers with the fresh MTEBv2 head-to-head (merged vs Nomic v1). Note in the caption that the comparison is under MTEBv2; the original MTEBv1 leaderboard numbers are not directly comparable.
    - **§4 Results — NewsCycle table**: KEEP existing v1 inter/extra/merged numbers from research notes (re-validated under new pipeline today: NewsCycle_inter_st_v1 Recall@1 = 0.1022, NewsCycle_extra_st_v1 Recall@1 = 0.0704). 8 comparison baselines also from research notes.
-   - **§4 Results — DailyOracle table**: DROP entirely. Methodologically inappropriate for embedding evaluation (MCQ format). Note in limitations or omit.
+   - **§4 Results — DailyOracle table**: KEEP. v1 NewsCycle_st holds rank 2 (Acc@1 = 0.2839, essentially tied with embeddinggemma 0.2877; beats Nomic v1 0.2745). Acknowledge the MCQ-vs-embedding methodological caveat in the methods or limitations section, but report the empirical result.
    - **§Reproducibility**: reference v2 branch on `github.com/Rptkiddle/contrastors_newscycle` as the reproducible build.
 
    **Editing approach**: don't touch citations or framing beyond what's needed. Don't push to Overleaf without explicit user approval (the manuscript is on the Overleaf git bridge).
@@ -202,7 +202,7 @@ The post-compact session will need to make ONE more commit to v2 after the MTEBv
    - Evening: v2 training procedure (k=20 HN, doc_max_length=2048, grad_cache) regressed in-domain NewsCycle by 30-60% relative. v2 models abandoned.
 2. **v1 frozen-fork models are canonical** for the manuscript: `rptkiddle/NewsCycle_inter_st`, `_extra_st`, `NewsCycle_st`. These are the shipping artifacts.
 3. **The v2 BRANCH is preserved** as a code-quality reference (clean environment, prefix bug fix, in-repo HN scripts, systematized packaging, REBUILD_NOTES). The v2 *models* on HF (`*_temp_v2` suffixes) were deleted today.
-4. **DailyOracle dropped** from manuscript on methodological grounds (MCQ format is for LLMs, not embedders).
+4. **DailyOracle KEPT** in the manuscript. Originally proposed to drop on methodological grounds (MCQ format), but the v1 NewsCycle_st model holds rank 2 on it (essentially tied with embeddinggemma, beats Nomic v1) — empirically good enough to report. Acknowledge methodological caveat but keep the result.
 5. **MTEBv2 head-to-head currently in progress** — see "Current session state" above for job IDs and outputs.
 6. **rsync of Snellius `~/data/` to local** is essentially complete (~25 GB at `~/Downloads/snellius_data_20260413/`).
 7. **Manuscript path**: `/Users/rupertkiddle/Desktop/manu/1_NEWSFLOWS/wp32_embeds/v1/0_manuscript.tex` — outside primary working dir, requires explicit per-session permission.
