@@ -17,7 +17,7 @@ train_args:
   max_grad_norm: 1.0
   adam_beta1: 0.9
   adam_beta2: 0.999
-  grad_cache: false
+  grad_cache: true
   loss_fn: "clip"
   use_fp8: false
   clamp_logits: false
