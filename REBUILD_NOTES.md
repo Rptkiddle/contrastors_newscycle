@@ -29,18 +29,94 @@ Systematic rebuild of the NewsCycle embedding model pipeline to resolve the MTEB
 **Key reference**: Nomic paper at https://arxiv.org/html/2402.01613v2
 
 **Contrastors fork**: `github.com/Rptkiddle/contrastors_newscycle` (fork of `nomic-ai/contrastors`)
-- Branch `main`: current state with all Snellius adaptations
-- Branch `rebuild-clean`: fresh copy of `upstream/main` (created 2026-04-12)
+- Branch `main`: the **frozen reference fork**. Source of the v1 production models on HF (`rptkiddle/NewsCycle_inter_st`, `_extra_st`, `NewsCycle_st`). Read-only — never push to it.
+- Branch `v2`: rebuild started from Nomic upstream (renamed from `rebuild-clean` 2026-04-13). Code-quality improvements + experimental training procedure changes. **The v2 training procedure regressed the model** (see "AIM1 outcome — final" below) so v2 is preserved as a code-quality reference but the v1 frozen-fork models remain canonical for the manuscript.
 
 ---
 
-## AIM1 outcome (2026-04-13)
+## AIM1 outcome — final (2026-04-13 evening)
 
-**AIM1: Fix contrastors reproducibility → RESOLVED.** The rebuild-clean pipeline produces a baseline model that is statistically indistinguishable from Nomic's own published `nomic-ai/nomic-embed-text-v1` under a head-to-head MTEBv2 evaluation. Our baseline scores +0.003 above Nomic's model on the overall 11-task STS average — well within noise. See Stage (vi) validation results below.
+AIM1 has TWO findings, one positive (morning) and one negative (evening). Both matter for the manuscript:
 
-The 0.129 STS "gap" from the original manuscript table was entirely explained by the MTEBv1 → MTEBv2 library transition: Nomic's leaderboard 0.821 was computed on MTEBv1 datasets, several of which (STS22, SummEval, and STS17 catastrophically) have been superseded in MTEBv2. Our previous fork's prefix-fix result (0.702) and our rebuild-clean result (0.698) are both very close to Nomic's own model's MTEBv2 score (0.695). The prefix fix got us ~80% of the way there within the frozen fork; the rebuild confirmed there was no additional training/environmental regression to chase.
+### Finding 1 — Baseline reproduction succeeded (morning)
 
-**What this means for the manuscript**: report MTEBv2 numbers (head-to-head vs Nomic v1) rather than attempting to reproduce MTEBv1 leaderboard numbers, which would require pinning to an older MTEB library version that's no longer the standard.
+The rebuild-clean code (now `v2` branch) produces a Nomic-equivalent baseline model. Trained on Nomic's own training recipe (no NewsCycle data), the rebuild's `baseline_st_temp_v2` scores **+0.003 above Nomic's own published `nomic-ai/nomic-embed-text-v1`** on a head-to-head MTEBv2 STS run (0.6978 vs 0.6950 overall). Statistically indistinguishable. This proves the rebuild *environment* and *code* are functionally equivalent to Nomic's, and resolves the original manuscript's "0.129 STS gap" as an MTEBv1 → MTEBv2 library transition artifact (not a real model deficiency).
+
+### Finding 2 — Production training procedure regressed the model (evening)
+
+When the v2 rebuild was applied to the production NewsCycle training (inter/extra/merged with k=20 HN mining, `document_max_length=2048`, `grad_cache=true`), the resulting models **substantially underperformed the v1 frozen-fork models on the in-domain NewsCycle benchmark**:
+
+**NewsCycle inter** (test_inter.jsonl, 62K queries, head-to-head v2 vs v1 same eval pipeline):
+
+| Metric | v2 (rebuild) | v1 (frozen fork) | Δ | Relative |
+|---|---|---|---|---|
+| Recall@1 | 0.0401 | 0.1022 | −0.062 | **−61%** |
+| Recall@5 | 0.1384 | 0.3453 | −0.207 | −60% |
+| Recall@10 | 0.2248 | 0.5335 | −0.309 | −58% |
+| MRR | 0.1003 | 0.2310 | −0.131 | −57% |
+
+**NewsCycle extra** (test_extra.jsonl, 53K queries, same head-to-head):
+
+| Metric | v2 (rebuild) | v1 (frozen fork) | Δ | Relative |
+|---|---|---|---|---|
+| Recall@1 | 0.0466 | 0.0704 | −0.024 | **−34%** |
+| Recall@5 | 0.1592 | 0.2894 | −0.130 | −45% |
+| Recall@10 | 0.2576 | 0.4796 | −0.222 | −46% |
+| MRR | 0.1138 | 0.1923 | −0.079 | −41% |
+
+**DailyOracle MCQ** (18K questions, same head-to-head, merged model only):
+
+| Metric | v2 (merged) | v1 (NewsCycle_st) | Δ |
+|---|---|---|---|
+| Accuracy@1 | 0.2648 | 0.2839 | −0.019 |
+| MRR | 0.5271 | 0.5402 | −0.013 |
+
+DailyOracle was a smaller drop, but in the same direction. The dominant signal is the in-domain NewsCycle regression.
+
+### What changed that broke the model
+
+Three deliberate "alignments with Nomic's published recipe" were applied during v2 training (vs the v1 frozen fork):
+
+1. **HN mining pool size: k=7 → k=20** with random sampling of 7 per training step. This matches Nomic's *"top 20 documents mined, randomly sampled the negatives"* description exactly. The v1 fork used a fixed k=7 set per query.
+2. **`document_max_length: 2048`** explicit override (vs the dataloader's hardcoded 256-token default that the v1 fork inherited). NewsCycle docs have median ~1500 tokens; the v1 fork was actually training on heavily truncated documents without realizing it.
+3. **`grad_cache: true`** to fit (2) on 94 GiB H100s without OOM. Mathematically equivalent in principle, but introduces chunked-recomputation that disables autocast at the inner step.
+
+**Most plausible primary cause**: the k=7 → k=20 change. With random sampling from a larger pool of negatives, the gradient signal during training averages over a *less-focused* set of negatives. For a task where temporal discrimination depends on subtle differences between adjacent months of the same entity, the v1 fork's "tighter" k=7 set may have been enforcing *exactly* the right kind of discrimination. Nomic's k=20 + sample-7 approach matches their published recipe but Nomic's data distribution (MSMARCO, NLI, etc.) is very different from NewsCycle's temporal-news distribution.
+
+**Less plausible but possible secondary causes**: (2) the longer documents may dilute the temporal signal by adding entity-context that's redundant across months; (3) grad_cache + autocast interaction may introduce subtle numerical drift, though we don't have evidence for this.
+
+**Not the cause**: training environment. Finding 1 (baseline reproduction) proved the rebuild-clean *environment* produces Nomic-equivalent models. The regression is in the training *procedure changes*, not the environment.
+
+### Decision: revert to v1 frozen-fork models for the manuscript
+
+For the manuscript's results section:
+- **NewsCycle benchmark**: report v1 fork numbers from the user's research notes (`NewsCycle_inter_st`: Recall@1 = 10.22% / MRR = 0.231; `NewsCycle_extra_st`: Recall@1 = 7.04% / MRR = 0.192). These have been independently re-validated under our current eval pipeline today.
+- **DailyOracle**: drop entirely from the manuscript (the MCQ format is methodologically inappropriate for embedding evaluation; even the v1 fork's signal range is only ~4 points above random).
+- **MTEBv2 head-to-head**: run `slurm4_mteb_eval.sh` with `MODEL_LABEL=merged` (= `rptkiddle/NewsCycle_st`, the v1 frozen-fork merged model) vs `MODEL_LABEL=nomic_v1`. Fresh same-day same-pipeline numbers across both models for the manuscript's MTEB table.
+
+### What `v2` is preserved as
+
+The `v2` branch is preserved on github + Snellius + local as a **clean code reference** that contains:
+- Fixed prefix-handling bug in MTEB evaluation
+- Documented training environment (2025 toolchain, all dependencies pinned)
+- Self-contained HN mining scripts (committed to `scripts/text/`, no orphan dependencies)
+- Systematized packaging pipeline (`slurm_package.sh` with transformers 4.45.2 isolated venv)
+- Comprehensive REBUILD_NOTES.md (this file)
+
+The `v2` *models* (`rptkiddle/<label>_{hf,st}_temp_v2` on HF) are abandoned. They will be deleted from HF Hub as part of today's housekeeping. Local checkpoints in `~/data/03_finetuned_model/<label>/` and `~/data/04_packaged_model/<label>_st/` are preserved (they're in the data archive being rsync'd to local).
+
+Future v2 work could revisit individual training-procedure changes in isolation — e.g., test k=20 HN alone without the doc_max_length=2048 change, or vice versa — to identify which specific change caused the regression. That's a deferred experiment, not blocking AIM1 closure.
+
+### What this means for the manuscript
+
+The **methods section** should describe the v1 production pipeline (the frozen-fork training recipe — k=7 HN, `document_max_length` left at the dataloader default, no grad_cache, the actual hyperparameters that produced the published models). That description is what's already in the manuscript, modulo the prefix-fix detail (§MTEB Evaluation should be updated to clarify how prefixes are passed).
+
+The **results section** should report:
+- MTEBv2 head-to-head: v1 NewsCycle_st (merged) vs Nomic v1 — to be run after this housekeeping completes
+- NewsCycle (entity-temporal retrieval): v1 inter / extra / merged numbers, plus 8 comparison baselines (already in research notes)
+- (No DailyOracle)
+
+The "0.129 STS gap" framing in the original manuscript should be replaced with the MTEBv2 head-to-head finding: under MTEBv2, our v1 model is statistically indistinguishable from Nomic v1 on STS, and the original "gap" was a library-version artifact.
 
 ## Findings from initial investigation (2026-04-11 — 2026-04-12)
 
