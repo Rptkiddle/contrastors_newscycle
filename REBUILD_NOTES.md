@@ -34,6 +34,29 @@ Systematic rebuild of the NewsCycle embedding model pipeline to resolve the MTEB
 
 ---
 
+## Manuscript framing + target venue (AIM3, 2026-04-14)
+
+**Target**: TACL (Transactions of the ACL) as primary, IPM (Information Processing & Management) as secondary fallback. Comm-sci venues (CMM, CCR) considered and rejected because they would require shoe-horning that weakens the paper.
+
+**Framing**: Face A (NLP/IR methods paper) is dominant. Face B (open infrastructure / reproducibility) is an enabling argument, not a standalone contribution. Face C (comm-sci motivation) belongs in the Introduction only.
+
+**Four contributions in order**:
+1. NewsCycle training task (including temporally-aware hard-negative selection)
+2. NewsCycle benchmark (interpolation + extrapolation splits)
+3. "Preserves vs erodes" empirical finding (standard retrieval fine-tune damages TempReason by 0.107/0.081; NewsCycle fine-tune is flat at -0.022/+0.006 vs the common base — our method protects a capability the standard recipe destroys)
+4. Fully-open reproducible artifact chain (weights + code + benchmark + data pipeline, load-bearing because the method requires fully open infrastructure)
+
+**Central empirical claim (headline for Discussion)**: NewsCycle fine-tuning preserves temporal-reasoning capability that the dominant retrieval fine-tuning recipe erodes — an underappreciated cost of the standard recipe that our approach mitigates.
+
+**Do not**: frame as comm-sci methods paper, lead with the blind spots as findings, claim we discovered the temporal gap, include LongEmbed (dissertation version). 
+
+**Full details**: see `project_wp32_framing.md` in the claude memory dir. That file is the canonical framing reference for all AIM3 revision work.
+
+**AIM3 in-progress items** (2026-04-14 evening):
+- Background + Discussion sections are placeholders ("to be written")
+- Targeted literature review planning is the next step
+- Section-by-section refinement of existing sections follows
+
 ## AIM1 outcome — final (2026-04-13 evening)
 
 AIM1 has TWO findings, one positive (morning) and one negative (evening). Both matter for the manuscript:
