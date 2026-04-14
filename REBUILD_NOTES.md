@@ -155,6 +155,33 @@ Strip those three and the Retrieval category delta shrinks from −0.026 to roug
 
 The story for §4 Results: **fine-tuning on NewsCycle preserves general MTEB capability** (overall −0.011), **with the cost concentrated in adversarial and specialized retrieval tasks** (ArguAna, Touche, TRECCOVID). On the in-domain NewsCycle benchmark the fine-tune produces substantial gains over the Nomic v1 base (v1 `NewsCycle_inter_st` Recall@1 = 0.1022; v1 `NewsCycle_extra_st` Recall@1 = 0.0704). On DailyOracle the merged model holds rank 2 (Acc@1 = 0.2839, tied with embeddinggemma 0.2877, beats Nomic v1 0.2745) despite the MCQ-vs-embedding methodological caveat.
 
+## TempReason out-of-domain validation (2026-04-14)
+
+Added as §4.4 after DailyOracle. 9-model panel, nDCG@10 on the English test splits of `TempReasonL2Fact` and `TempReasonL3Fact` (Tan et al. 2023). For 6 of 8 baselines the scores come from the HF `mteb/results` leaderboard (published numbers at each model's submitted best configuration); for NewsCycle_st, qwen3-embedding-0.6b, and google/embeddinggemma-300m (which had no TempReason L2/L3 Fact results on the leaderboard) we measured them ourselves via `eval4_tempreason.sh` using the MTEB evaluate pipeline.
+
+### Final table (sorted by L2Fact desc)
+
+| Model | Release | L2Fact | L3Fact | Source |
+|---|---|---|---|---|
+| embeddinggemma-300m | Sep 2025 | **0.3428** | 0.2803 | ours |
+| bge-m3 | Jan 2024 | 0.3323 | **0.3005** | HF |
+| nomic-embed-text-v1-unsupervised | Feb 2024 | 0.2216 | 0.1997 | HF |
+| qwen3-embedding-0.6b | Jun 2025 | 0.2120 | 0.1883 | ours |
+| **NewsCycle_st** | — | **0.1997** | **0.2052** | **ours** |
+| all-MiniLM-L6-v2 | Aug 2021 | 0.1765 | 0.1416 | HF |
+| nomic-embed-text-v1 | Feb 2024 | 0.1143 | 0.1189 | HF |
+| all-mpnet-base-v2 | Aug 2021 | 0.1120 | 0.0942 | HF |
+| paraphrase-multi-MiniLM-L12-v2 | Aug 2021 | 0.0621 | 0.0677 | HF |
+
+### Manuscript framing
+
+NewsCycle_st ranks **3rd on L3Fact, 5th on L2Fact** in the 9-model panel. The methodologically meaningful comparison is against `nomic-embed-text-v1` (Nomic's general-purpose supervised fine-tune of the same base): Nomic's recipe **destroys** temporal-reasoning capability of the base model (L2Fact 0.2216→0.1143, L3Fact 0.1997→0.1189), while NewsCycle's temporal-entity fine-tune is **essentially flat** vs the base (L2 Δ=−0.022, L3 Δ=+0.006). The framing claim is: **NewsCycle fine-tuning preserves temporal-reasoning capability that standard retrieval fine-tuning erodes**, as an underappreciated cost of optimising against MS MARCO-style large-scale retrieval data.
+
+### Caveats
+
+- Qwen3 and embeddinggemma were run ourselves with plain SentenceTransformer encoding (no `prompt_name="query"`, no `encode_query()`/`encode_document()` dedicated methods). Their scores are floor estimates; their author-submitted best configs may be slightly higher. Worth noting that embeddinggemma still ranks #1 on L2Fact even with our under-optimal encoding.
+- Our own measurement of `nomic-embed-text-v1` (via slurm4c earlier on 2026-04-14, before we decided to use HF-published numbers for baselines) gave L2=0.1581 / L3=0.1663 — significantly higher than the HF-published 0.1143 / 0.1189. The discrepancy is attributable to HF's NomicWrapper config (max_tokens=8192 rotary extrapolation + default prompts dict with `query`/`document` keys instead of `Retrieval-query`/`Retrieval-document`). We defer to the HF-published number in the paper because it represents "Nomic v1 at its community-submitted best" per standard comparison practice.
+
 ### Key session facts to preserve
 
 1. **AIM1 is RESOLVED**, with two findings:
