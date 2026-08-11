@@ -16,8 +16,6 @@ The novel technical contribution is **temporally-aware hard-negative selection**
 - `src/contrastors/configs/data/finetune_triplets_news_{inter,extra,merged}.yaml` — data configs that add a NewsCycle shard alongside Nomic's 10 upstream datasets
 - `src/contrastors/configs/train/contrastive_finetune_news.yaml` — training config with `document_max_length: 2048` and `query_max_length: 64` for NewsCycle's longer documents
 - `convert_hf_to_st.py` — HF NomicBertModel → SentenceTransformer conversion
-- `REBUILD_NOTES.md` — comprehensive historical record of the V1 rebuild process
-- `V2_STATUS.md` — this file
 
 **Modified files (minimal, necessary changes):**
 - `src/contrastors/configs/train/contrastive_finetune.yaml` — output dir, workers, data config path for Snellius
@@ -31,26 +29,59 @@ The novel technical contribution is **temporally-aware hard-negative selection**
 
 **Unchanged**: all core training logic (loss functions, GradCache, data loading, model architecture). We add a dataset to the mixture; we do not modify the training machinery.
 
+## Repository layout
+
+Three repos under `code/2_NEWS/wp32-embeds/`, each with `main` (V1) and `v2` branches:
+
+| Repo | Purpose | main branch | v2 branch |
+|---|---|---|---|
+| `newscycle-contrastors/` | Nomic contrastors fork (this repo) | V1 frozen fork (read-only) | Active V2 development |
+| `newscycle-gdelter/` | GDELT download + q:d construction | V1 processing code | V2 q:d formulation (to be modified) |
+| `newscycle-paper/` | SLURMs, diagnostics, supplementary | V1 SLURM scripts | V2 SLURMs + separability probe |
+
+To work on V2: `git checkout v2` in all three repos.
+
+## Data layout
+
+All under `data/2_NEWS/wp32-embeds/`:
+
+```
+gdelt/                    # shared, version-agnostic
+├── processed/            # 11G, 2,147 merged GDELT day-files (2020–2025). PROTECTED.
+├── quality/              # domain_pc1.csv, domain_ratings.csv
+├── logs/                 # pipeline run logs
+└── gdelter.zip           # 9.3G safety backup (pending inspection)
+
+v1/                       # V1 artifacts (corresponds to main branches)
+├── training-data/        # 5 JSONL splits (train/test × inter/extra + merged)
+├── processing/           # notebook exports from q:d construction
+├── hard-negatives/       # k=7 HN shards (5.8G)
+├── models/               # finetuned checkpoints (8.2G, canonical for dissertation)
+└── eval/                 # MTEBv2, NewsCycle, DailyOracle, TempReason results
+
+v2/                       # V2 artifacts (corresponds to v2 branches)
+├── training-data/        # empty — will hold new q:d formulation output
+├── hard-negatives/       # k=20 HN shards from first attempt (15G, reusable)
+└── eval/                 # regression evidence from abandoned run
+
+supplementary/            # ST-datasets for audit notebooks (CC_news, NPR, CNN, AG_news)
+```
+
 ## Data pipeline
 
 Training data comes from GDELT (Global Database of Events, Language, and Tone), 2020–2025:
 - ~4.7M articles after domain quality filtering (Lin 2023, PC1 ≥ 0.75)
 - Entity filtering: temporal frequency ≥ 12 months, mean document frequency ≥ 15 articles/month → 2,449 entities, 154,704 (entity, month, year) keys
-- Data processing code: `../wp32-gdelt-downloader/02_gdelt_processing/gdelt_processing.ipynb`
+- Data processing code: `newscycle-gdelter/processing/gdelt_processing.ipynb`
 
-**Current q:d construction (V1):** For each (entity, month) key, all matching articles are concatenated chronologically (title + description + entity-filtered verbphrases/quotes), date-masked, and capped at 2048 estimated tokens. Queries are natural-language templates combining entity name and month-year (960 variations).
+**V1 q:d construction:** For each (entity, month) key, all matching articles are concatenated chronologically (title + description + entity-filtered verbphrases/quotes), date-masked, and capped at 2048 estimated tokens. Queries are natural-language templates combining entity name and month-year (960 variations).
 
-**V2 q:d redesign (pending decision):** A separability probe (results in `../diagnostic/output/`) tested atomic (single-article) vs aggregate (concatenated) document representations. Key findings:
+**V2 q:d redesign (pending decision):** A separability probe (`newscycle-paper/diagnostic/`) tested atomic (single-article) vs aggregate (concatenated) document representations. Key findings:
 - Aggregates retain a robust temporal signal (Cohen's d = 0.90 for within-vs-adjacent month)
 - But in oracle retrieval — which mirrors training and eval — atomic candidates win (P@1 = 0.588 vs 0.527)
 - Recommendation: adopt atomic documents for V2 (better distribution match to deployment, crisper hard negatives, no doc_max machinery), but note that aggregation is not broken — the switch is for practical advantages, not because the old design was geometrically defective
 
 **Decision not yet made by the user.** This is the first thing to resolve before V2 training.
-
-## Branch layout
-
-- **`main`** — frozen V1 fork. Source of the published models on HF. Read-only; never push to it.
-- **`v2`** (this branch) — started from Nomic upstream. Contains code-quality improvements + the V1 rebuild pipeline. The V2 *training procedure* changes (k=20 HN, doc_max=2048, grad_cache) were tested and regressed the model 30–60% on in-domain NewsCycle (see REBUILD_NOTES.md "AIM1 outcome — final"). Those V2 models are abandoned. The code is preserved and is the starting point for the next V2 attempt.
 
 ## V1 models (canonical, on HuggingFace)
 
@@ -60,20 +91,55 @@ Training data comes from GDELT (Global Database of Events, Language, and Tone), 
 | Extrapolation | `rptkiddle/NewsCycle_extra_st` | 2020–2023 train / 2024–2025 test | Generalisation to unseen future |
 | Merged | `rptkiddle/NewsCycle_st` | All 154,704 keys | Production model (all data) |
 
-These are the manuscript-canonical models. V1 training used k=7 fixed hard negatives, doc_max_length=256 (dataloader default, not an intentional choice), no grad_cache.
+V1 training used k=7 fixed hard negatives, doc_max_length=256 (dataloader default, not an intentional choice), no grad_cache.
 
-## V1 → V2 regression: what we know
+## V1 → V2 regression: what happened
 
-Three changes were bundled in the failed V2 attempt:
+Three changes were bundled in the failed V2 attempt and caused a 30–60% regression on in-domain NewsCycle:
+
 1. **k=7 → k=20 HN** (most suspect) — random sampling from a larger pool dilutes the gradient signal for temporal discrimination
 2. **doc_max_length 256 → 2048** — the separability probe suggests this is NOT the primary cause (aggregates retain signal)
 3. **grad_cache=true** — enabled to fit (2) in memory; disables autocast at inner step, possible numerical drift
 
-**V2 plan**: test these changes in isolation (one per run, ~1 hr each on 4×H100) to identify which caused the regression, then build the V2 recipe from what works. This isolation testing should happen on top of whichever q:d design (atomic or aggregate) is chosen.
+Detailed regression numbers (V2 vs V1, same eval pipeline):
+
+| Benchmark | Metric | V2 | V1 | Relative |
+|---|---|---|---|---|
+| NewsCycle inter | Recall@1 | 0.040 | 0.102 | −61% |
+| NewsCycle inter | MRR | 0.100 | 0.231 | −57% |
+| NewsCycle extra | Recall@1 | 0.047 | 0.070 | −34% |
+| NewsCycle extra | MRR | 0.114 | 0.192 | −41% |
+| DailyOracle | Acc@1 | 0.265 | 0.284 | −7% |
+
+The V2 models have been deleted. The V2 k=20 hard-negative shards are preserved for isolation testing.
+
+## Nomic ground-truth parameters (contrastive fine-tuning stage)
+
+These are the parameters we reproduce. Source: Nussbaum et al. 2025, arxiv.org/abs/2402.01613.
+
+- **Checkpoint**: `nomic-ai/nomic-embed-text-v1-unsupervised`
+- **Batch size**: 256
+- **Sequence length**: 2048 (but dataloader truncates to `DEFAULT_COL_TO_MAX_TOKENS = {query: 32, document: 256, negative: 256}`)
+- **Learning rate**: 2e-5, AdamW (β₁=0.9, β₂=0.999), weight decay 0.01, grad clip 1.0
+- **Warmup**: 400 steps, linear cooldown to 0
+- **Epochs**: 1
+- **Hard negatives**: k=7 from top-20 mined (gte-base embeddings, cosine similarity), randomly sampled at training time
+- **Datasets**: MSMarco (484,864), NLI (275,200), Reddit (199,680), MEDI SuperNLI (177,408), HotpotQA (169,728), FEVER (139,776), MEDI StackExchange (100,352), NQ (69,888), MEDI Flickr (50,944), MEDI Wiki (24,832)
+- **Checkpointing**: save every 4,500 steps
+- **MTEB evaluation**: max seq 512, L2 normalisation for all tasks except Classification
+
+## Model packaging recipe
+
+Packaging converts BiEncoder checkpoint → HF NomicBertModel → SentenceTransformer format.
+
+**Key details:**
+- Uses **transformers 4.45.2** in an isolated venv (transformers 5.x has a `NomicBertModel.__init__` isinstance check that breaks the save/load round-trip)
+- `convert_to_hf.py` then `convert_hf_to_st.py` with `--trust-remote-code --pooling mean --normalize`
+- `push_to_hub(use_temp_dir=False)` requires a pre-created work directory matching the repo basename
+- Post-conversion config corrections: `embd_pdrop=0.0`, `resid_pdrop=0.0`, `rotary_scaling_factor=2`
+- Validation against `nomic-ai/nomic-embed-text-v1` reference (file manifest, config structure, modules layout)
 
 ## MTEB evaluation recipe
-
-The correct prefix recipe for any Nomic-family model evaluation:
 
 ```python
 NOMIC_PROMPTS = {
@@ -91,19 +157,16 @@ model = SentenceTransformer(MODEL_ID, prompts=NOMIC_PROMPTS, trust_remote_code=T
 result = mteb.evaluate(model, [task], encode_kwargs={...}, cache=None)
 ```
 
-Prompts must be passed at construction time. Keys are MTEB task types, not prompt types. `cache=None` is required for fresh evaluation (the default cache silently returns stale results).
+**Critical**: prompts at construction time, task-type keys (not prompt-type keys), `cache=None` for fresh evaluation.
 
-## Key paths (all under `~/Desktop/`)
+## Snellius HPC notes
 
-| Resource | Path |
-|---|---|
-| This repo | `code/2_NEWS/wp32-embeds/wp32-contrastors-newscycle/` |
-| GDELT downloader + processing | `code/2_NEWS/wp32-embeds/wp32-gdelt-downloader/` |
-| SLURM scripts | `code/2_NEWS/wp32-embeds/wp32-SLURMs/` |
-| Separability probe | `code/2_NEWS/wp32-embeds/diagnostic/` |
-| TACL manuscript (Overleaf) | `manu/2_NEWS/wp32-embeds/v1/` |
-| Pipeline data | `data/2_NEWS/wp32-embeds/` |
-| Project home (session home) | `proj/2_NEWS/wp32-embeds/` |
+- **Partition**: `gpu_h100` (4×H100, ~1 hr per training run)
+- **Toolchain**: Python 3.13, CUDA 12.8, PyTorch 2.7.0, flash-attn 2.8.3
+- **HN mining toolchain** (separate, older): Python 3.11.3, CUDA 12.1.1, PyTorch 2.1.2, faiss-cpu 1.7.4
+- **SSH host key** may need re-accepting on current machine
+- **Log hygiene**: successful SLURM logs go to `~/data/<stage>/logs/`; failed logs are deleted. Never leave `.out` files in `~/`.
+- **Dataset cache isolation**: `HF_DATASETS_CACHE="$TMPDIR/hf_datasets"` per job to prevent parallel race conditions on ArguAna load
 
 ## Manuscript target
 
@@ -113,16 +176,21 @@ Prompts must be passed at construction time. Keys are MTEB task types, not promp
 3. "Preserves vs erodes" finding — NewsCycle fine-tuning preserves temporal reasoning that standard retrieval fine-tuning (Nomic's recipe) erodes
 4. Fully-open reproducible artifact chain
 
-See `project_wp32_framing.md` in the Claude memory directory for full framing details.
+Manuscript at `manu/2_NEWS/wp32-embeds/v1/`, synced with Overleaf. See `project_wp32_framing.md` in the Claude memory directory for full framing details.
 
 ## What to do next
 
 1. **Decide atomic vs aggregate q:d design** — probe results are ready, user hasn't made the call yet
-2. **Implement chosen q:d design** in `gdelt_processing.ipynb`
+2. **Implement chosen q:d design** in `newscycle-gdelter/processing/gdelt_processing.ipynb`
 3. **Isolation testing** of k, doc_max, grad_cache on Snellius (one change per run)
 4. **V2 model training** with final recipe
 5. **TACL manuscript update** — template conversion, bootstrap CIs, results refresh
 
-## Historical record
+## GitHub repos
 
-`REBUILD_NOTES.md` in this branch contains the full chronological record of the V1 rebuild process, including all findings, decisions, and benchmarks. It is comprehensive but long (~620 lines) and contains some stale paths (`1_NEWS` → `2_NEWS`). Consult it for historical context; use this file for current state.
+| Repo | GitHub | Notes |
+|---|---|---|
+| `newscycle-contrastors` | `Rptkiddle/contrastors_newscycle` | Consider renaming on GitHub |
+| `newscycle-gdelter` | `Rptkiddle/wp32_gdelt_downloader` | Consider renaming on GitHub |
+| `newscycle-paper` | *(not yet created)* | Needs `gh repo create` |
+| `NewsCycle` | `Rptkiddle/NewsCycle` | Empty placeholder, Apache 2.0 |
