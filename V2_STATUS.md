@@ -31,15 +31,15 @@ The novel technical contribution is **temporally-aware hard-negative selection**
 
 ## Repository layout
 
-Three repos under `code/2_NEWS/wp32-embeds/`, each with `main` (V1) and `v2` branches:
+Three repos under `code/2_NEWS/wp32-embeds/`, each with `main` (active V2) and `v1_dissertation` (archived V1) branches:
 
-| Repo | Purpose | main branch | v2 branch |
+| Repo | Purpose | main branch | v1_dissertation branch |
 |---|---|---|---|
-| `newscycle-contrastors/` | Nomic contrastors fork (this repo) | V1 frozen fork (read-only) | Active V2 development |
-| `newscycle-gdelter/` | GDELT download + q:d construction | V1 processing code | V2 q:d formulation (to be modified) |
-| `newscycle-paper/` | SLURMs, diagnostics, supplementary | V1 SLURM scripts | V2 SLURMs + separability probe |
+| `newscycle-contrastors/` | Nomic contrastors fork (this repo) | Active V2 development | V1 frozen fork (read-only) |
+| `newscycle-gdelter/` | GDELT collection (`collect.py`) + processing (`process.py`) | V2 BigQuery collector + processor | V1 file-based downloader |
+| `newscycle-paper/` | SLURMs, supplementary notebooks | V2 SLURM scripts + supplementary | V1 SLURM scripts + supplementary |
 
-To work on V2: `git checkout v2` in all three repos.
+All three repos default to `main` (V2). To view V1: `git checkout v1_dissertation`.
 
 ## Data layout
 
@@ -72,11 +72,13 @@ supplementary/            # ST-datasets for audit notebooks (CC_news, NPR, CNN, 
 Training data comes from GDELT (Global Database of Events, Language, and Tone), 2020–2025:
 - ~4.7M articles after domain quality filtering (Lin 2023, PC1 ≥ 0.75)
 - Entity filtering: temporal frequency ≥ 12 months, mean document frequency ≥ 15 articles/month → 2,449 entities, 154,704 (entity, month, year) keys
-- Data processing code: `newscycle-gdelter/processing/gdelt_processing.ipynb`
+- Collection: `newscycle-gdelter/collect.py` (BigQuery → per-day parquet)
+- Processing: `newscycle-gdelter/process.py` (parquet → training JSONL)
+- Notebook: `newscycle-gdelter/processing/gdelt_processing.ipynb` (interactive exploration)
 
 **V1 q:d construction:** For each (entity, month) key, all matching articles are concatenated chronologically (title + description + entity-filtered verbphrases/quotes), date-masked, and capped at 2048 estimated tokens. Queries are natural-language templates combining entity name and month-year (960 variations).
 
-**V2 q:d redesign (pending decision):** A separability probe (`newscycle-paper/diagnostic/`) tested atomic (single-article) vs aggregate (concatenated) document representations. Key findings:
+**V2 q:d redesign (pending decision):** A separability probe (run in a prior session; results documented in project memory) tested atomic (single-article) vs aggregate (concatenated) document representations. Key findings:
 - Aggregates retain a robust temporal signal (Cohen's d = 0.90 for within-vs-adjacent month)
 - But in oracle retrieval — which mirrors training and eval — atomic candidates win (P@1 = 0.588 vs 0.527)
 - Recommendation: adopt atomic documents for V2 (better distribution match to deployment, crisper hard negatives, no doc_max machinery), but note that aggregation is not broken — the switch is for practical advantages, not because the old design was geometrically defective
@@ -188,9 +190,9 @@ Manuscript at `manu/2_NEWS/wp32-embeds/v1/`, synced with Overleaf. See `project_
 
 ## GitHub repos
 
-| Repo | GitHub | Notes |
+| Repo | GitHub | Visibility |
 |---|---|---|
-| `newscycle-contrastors` | `Rptkiddle/contrastors_newscycle` | Consider renaming on GitHub |
-| `newscycle-gdelter` | `Rptkiddle/wp32_gdelt_downloader` | Consider renaming on GitHub |
-| `newscycle-paper` | *(not yet created)* | Needs `gh repo create` |
+| `newscycle-contrastors` | `Rptkiddle/newscycle-contrastors` | Public (fork of nomic-ai/contrastors) |
+| `newscycle-gdelter` | `Rptkiddle/newscycle-gdelter` | Private |
+| `newscycle-paper` | `Rptkiddle/newscycle-paper` | Private |
 | `NewsCycle` | `Rptkiddle/NewsCycle` | Empty placeholder, Apache 2.0 |
