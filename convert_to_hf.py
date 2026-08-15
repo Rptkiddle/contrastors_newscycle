@@ -41,6 +41,21 @@ if __name__ == "__main__":
     if args.biencoder:
         config = BiEncoderConfig.from_pretrained(args.ckpt_path)
         model = BiEncoder.from_pretrained(args.ckpt_path, config=config)
+        # Checkpoints saved under transformers 5.x store the nested encoder
+        # module under a doubled prefix (trunk.encoder.encoder.*). Loading
+        # under transformers 4.x, from_pretrained drops those keys with only
+        # a warning, leaving base-model weights in the transformer body.
+        # Reload the full checkpoint state dict explicitly with the prefix
+        # remapped; strict=True guarantees every tensor lands or we fail.
+        from safetensors.torch import load_file
+
+        state = load_file(str(Path(args.ckpt_path) / "model.safetensors"))
+        remapped = {}
+        for key, tensor in state.items():
+            new_key = key.removeprefix("trunk.").replace("encoder.encoder.", "encoder.", 1)
+            remapped[new_key] = tensor
+        model.trunk.load_state_dict(remapped, strict=True)
+        print(f"Reloaded {len(remapped)} checkpoint tensors into trunk (strict)")
         model = model.trunk
     elif args.vision:
         NomicBertConfig.register_for_auto_class()
