@@ -40,8 +40,10 @@ def state_dict_from_pretrained(model_name, safe_serialization=False, device=None
     else:  # Try loading from HF hub instead of from local files
         resolved_archive_file = None
         for weight_name in [WEIGHTS_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_INDEX_NAME]:
+            # token=None: use a cached HF token when present, else anonymous
+            # (token=True hard-requires a login even for public models)
             resolved_archive_file = cached_file(
-                model_name, weight_name, token=True, _raise_exceptions_for_missing_entries=False
+                model_name, weight_name, token=None, _raise_exceptions_for_missing_entries=False
             )
             if resolved_archive_file is not None:
                 if weight_name in [SAFE_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME]:
