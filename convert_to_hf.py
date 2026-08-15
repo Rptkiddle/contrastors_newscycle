@@ -23,11 +23,17 @@ from contrastors.models.huggingface import NomicBertConfig, NomicBertForPreTrain
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--ckpt_path", type=str, required=True)
-    parser.add_argument("--model_name", type=str, required=True)
+    parser.add_argument("--model_name", type=str, default=None,
+                        help="HF Hub repo id to push to (omit when using --save_dir)")
+    parser.add_argument("--save_dir", type=str, default=None,
+                        help="Save the converted model to a local directory instead of pushing to the Hub")
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--biencoder", action="store_true")
     parser.add_argument("--vision", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if (args.model_name is None) == (args.save_dir is None):
+        parser.error("provide exactly one of --model_name (Hub push) or --save_dir (local save)")
+    return args
 
 
 if __name__ == "__main__":
@@ -52,4 +58,8 @@ if __name__ == "__main__":
         config = NomicBertConfig.from_pretrained(args.ckpt_path)
         model = NomicBertForPreTraining.from_pretrained(args.ckpt_path, config=config)
 
-    model.push_to_hub(args.model_name, private=args.private, use_temp_dir=False)
+    if args.save_dir is not None:
+        model.save_pretrained(args.save_dir)
+        print(f"Saved converted model to {args.save_dir}")
+    else:
+        model.push_to_hub(args.model_name, private=args.private, use_temp_dir=False)
