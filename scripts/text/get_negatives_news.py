@@ -1,352 +1,249 @@
+"""Mine hard negatives for NewsCycle training splits.
+
+For each training record (one query and one positive document per
+(entity, month-year) key), the candidate pool is every other record in
+the same split with the same normalised entity and a different
+month-year. Candidates are ranked by gte-base query-document cosine
+similarity (the miner Nomic used for their fine-tuning datasets); the
+top --k survivors are stored as hard negatives.
+
+Two near-duplicate screens run before selection, both using the same
+5-gram crc32 shingle Jaccard machinery and threshold as the data
+pipeline (newscycle-gdelter/process.py):
+  1. a candidate that near-duplicates the positive is excluded
+     (wire copy re-run in a different month is not a valid negative);
+  2. a candidate that near-duplicates an already selected negative is
+     excluded (the stored list holds distinct articles).
+
+Records with fewer than --min-negatives surviving candidates are
+dropped: the contrastive loss assumes a uniform negative count within a
+batch, so short records would silently misalign the labels. Drop counts
+and screen statistics are written to mining_stats.json.
+
+Run on a single GPU:
+    python get_negatives_news.py --dataset train_merged.jsonl.gz --output_dir out/
+"""
+
+import argparse
 import gzip
 import json
-import math
 import os
-import re
-from argparse import ArgumentParser
-from datetime import timedelta
+import zlib
+from collections import Counter, defaultdict
 from pathlib import Path
 
-import faiss
 import numpy as np
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-
-MONTH_RE = re.compile(r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\b")
-YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+MODEL_NAME = "thenlper/gte-base"
 
 
 def parse_args():
-    parser = ArgumentParser()
-    parser.add_argument("--dataset", required=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", required=True, help="train_*.jsonl or .jsonl.gz")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--k", type=int, default=20)
-    parser.add_argument("--query_key", default="question")
-    parser.add_argument("--document_key", default="positive_ctxs")
-    parser.add_argument("--negatives_key", default="hard_negative_ctxs")
-    parser.add_argument("--add_title", action="store_true")
-    parser.add_argument("--neighbor_multiplier", type=int, default=3,
-                        help="Initial multiplier for how many neighbors to request (k * multiplier)")
-    parser.add_argument("--neighbor_max", type=int, default=0,
-                        help="Maximum neighbors to request (0 => no explicit cap, i.e. len(documents))")
-
+    parser.add_argument("--k", type=int, default=20, help="negatives stored per record")
+    parser.add_argument("--min_negatives", type=int, default=7,
+                        help="drop records with fewer surviving negatives (trainer sample size)")
+    parser.add_argument("--dedup_threshold", type=float, default=0.7,
+                        help="shingle Jaccard threshold, matching the data pipeline")
+    parser.add_argument("--shard_size", type=int, default=100_000)
     return parser.parse_args()
 
 
-def extract_month_year(text: str):
-    if not isinstance(text, str):
-        return None
-    m = MONTH_RE.search(text)
-    y = YEAR_RE.search(text)
-    if m and y:
-        return f"{m.group(1)}-{y.group(0)}"
-    return None
+# --- near-duplicate detection: identical to newscycle-gdelter/process.py ---
+
+def shingle_set(text: str, n: int = 5) -> set:
+    # zlib.crc32 rather than hash(): the latter is salted per process and
+    # would make dedup non-reproducible across runs
+    words = text.lower().split()
+    if len(words) < n:
+        return {zlib.crc32(" ".join(words).encode("utf-8"))}
+    return {zlib.crc32(" ".join(words[i:i + n]).encode("utf-8"))
+            for i in range(len(words) - n + 1)}
 
 
-def load_dataset(path, query_key, document_key, negatives_key):
-    queries = []
-    documents = []
-    all_data = []
+def jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    return inter / (len(a) + len(b) - inter)
+
+
+# --- IO ---
+
+def load_records(path):
     path = Path(path)
-    if path.is_dir():
-        files = sorted(path.glob("shard-*.jsonl.gz"))
-    else:
-        files = [path]
-    seen_documents = set()
-    for file in tqdm(files, desc="Loading shards"):
-        if file.suffix == ".gz":
-            filehandler = gzip.open(file, "rt")
-        else:
-            filehandler = open(file, "r")
-        with filehandler as f:
-            for line in f:
-                data = json.loads(line)
-                queries.append({query_key: data[query_key]})
-                docs = data[document_key]
-
-                # maintain documents as list of dicts {document_key: docs}
-                # de-duplicate by the raw value (string or dict serialised)
-                doc_key = json.dumps(docs, sort_keys=True)
-                if doc_key not in seen_documents:
-                    documents.append({document_key: docs})
-                    seen_documents.add(doc_key)
-
-                if negatives_key in data:
-                    negatives = data[negatives_key]
-
-                    # nq format is in list for whatever reason
-                    if isinstance(negatives, str):
-                        negatives = [{document_key: negatives}]
-                    elif isinstance(negatives, list):
-                        if len(negatives) > 0 and isinstance(negatives[0], str):
-                            negatives = [{document_key: neg} for neg in negatives]
-                    else:
-                        raise ValueError(f"Unknown format for negatives: {negatives}")
-
-                    # add negatives to documents if unseen
-                    for neg in negatives:
-                        neg_val = neg[document_key]
-                        neg_key = json.dumps(neg_val, sort_keys=True)
-                        if neg_key not in seen_documents:
-                            documents.append({document_key: neg_val})
-                            seen_documents.add(neg_key)
-
-                all_data.append(data)
-
-    return queries, documents, all_data
+    opener = gzip.open if path.suffix == ".gz" else open
+    records = []
+    with opener(path, "rt") as f:
+        for line in tqdm(f, desc="Loading records"):
+            records.append(json.loads(line))
+    return records
 
 
-def print_rank0(*args, **kwargs):
-    if dist.get_rank() == 0:
-        print(*args, **kwargs)
+def write_shards(records, output_dir, shard_size):
+    metadata = {"objective": {"self": [], "paired": [], "triplet": [["query", "document", "negatives"]]}}
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for shard_start in range(0, len(records), shard_size):
+        shard_num = shard_start // shard_size
+        final_path = output_dir / f"shard-{shard_num:05d}.jsonl.gz"
+        tmp_path = output_dir / f"shard-{shard_num:05d}.jsonl.gz.tmp"
+        with gzip.open(tmp_path, "wt") as f:
+            for record in tqdm(records[shard_start:shard_start + shard_size],
+                               desc=f"Writing shard {shard_num:05d}"):
+                record["metadata"] = metadata
+                f.write(json.dumps(record) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, final_path)
+    return (len(records) + shard_size - 1) // shard_size
 
+
+# --- embedding (gte-base, mean pooling over final hidden states) ---
 
 def mean_pooling(model_output, attention_mask):
-    token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
-    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+    token_embeddings = model_output[0]
+    mask = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    return torch.sum(token_embeddings * mask, 1) / torch.clamp(mask.sum(1), min=1e-9)
 
 
-def embed(model, tokenizer, dataset, batch_size, key, add_title=False):
-    embeddings = []
+def embed_texts(model, tokenizer, texts, batch_size, desc):
+    embeddings = np.empty((len(texts), model.config.hidden_size), dtype=np.float32)
     with torch.no_grad():
-        for batch_start in tqdm(range(0, len(dataset), batch_size), desc=f"Embedding {key}"):
-            batch_end = min(batch_start + batch_size, len(dataset))
-            batch = dataset[batch_start:batch_end]
-            if add_title:
-                batch = [line.get("title", "") + " " + line[key] for line in batch]
-            else:
-                batch = [line[key] for line in batch]
-
+        for start in tqdm(range(0, len(texts), batch_size), desc=desc):
+            batch = texts[start:start + batch_size]
             tokenized = tokenizer(batch, padding=True, truncation=True, return_tensors="pt").to(model.device)
-
-            model_output = model(**tokenized)
-            pooled = mean_pooling(model_output, tokenized["attention_mask"])
-            normalized_emb = F.normalize(pooled, p=2, dim=1)
-            embeddings.extend(normalized_emb.detach().cpu().numpy())
-
+            pooled = mean_pooling(model(**tokenized), tokenized["attention_mask"])
+            normalized = F.normalize(pooled, p=2, dim=1)
+            embeddings[start:start + len(batch)] = normalized.float().cpu().numpy()
     return embeddings
 
 
-def knn_neighbors(queries, index, batch_size, k):
-    all_scores, all_indices = [], []
-    for i in tqdm(range(0, len(queries), batch_size), disable=dist.get_rank() != 0):
-        query_embs = queries[i : i + batch_size]
-        top_k_scores, top_k_indices = index.search(np.array(query_embs).astype(np.float32), k)
+# --- mining ---
 
-        all_scores.extend(top_k_scores)
-        all_indices.extend(top_k_indices)
+def mine_group(group, records, q_emb, d_emb, k, min_negatives, dedup_threshold, stats):
+    """Select hard negatives for every record of one entity. Returns
+    {record_idx: [negative record_idx, ...]} for records that keep
+    >= min_negatives; drops the rest."""
+    sims = q_emb[group] @ d_emb[group].T  # (n, n) within-entity similarity
+    shingles = {}
 
-    return all_scores, all_indices
+    def shingle_of(idx):
+        if idx not in shingles:
+            shingles[idx] = shingle_set(records[idx]["document"])
+        return shingles[idx]
+
+    selected_by_record = {}
+    for row, i in enumerate(group):
+        rec = records[i]
+        month_key = (rec["year"], rec["month"])
+        candidates = [
+            (sims[row, col], j)
+            for col, j in enumerate(group)
+            if (records[j]["year"], records[j]["month"]) != month_key
+            and records[j]["article_id"] != rec["article_id"]
+        ]
+        candidates.sort(key=lambda t: -t[0])
+        stats["pool_sizes"][min(len(candidates), 80)] += 1
+
+        pos_shingles = shingle_of(i)
+        selected = []
+        selected_shingles = []
+        for _, j in candidates:
+            cand_shingles = shingle_of(j)
+            if jaccard(cand_shingles, pos_shingles) >= dedup_threshold:
+                stats["screened_vs_positive"] += 1
+                continue
+            if any(jaccard(cand_shingles, s) >= dedup_threshold for s in selected_shingles):
+                stats["screened_vs_selected"] += 1
+                continue
+            selected.append(j)
+            selected_shingles.append(cand_shingles)
+            if len(selected) == k:
+                break
+
+        if len(selected) < min_negatives:
+            stats["dropped_lt_min"] += 1
+            stats["dropped_entities"][rec["entity_norm"]] += 1
+        else:
+            selected_by_record[i] = selected
+            stats["negative_counts"][len(selected)] += 1
+    return selected_by_record
 
 
-def merge_unique_preserve(old, new):
-    seen = set()
-    out = []
-    for x in old + new:
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
+def main():
+    args = parse_args()
+    records = load_records(args.dataset)
+    print(f"Loaded {len(records):,} records")
+
+    by_entity = defaultdict(list)
+    for i, rec in enumerate(records):
+        by_entity[rec["entity_norm"]].append(i)
+    print(f"{len(by_entity):,} entities")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    model = AutoModel.from_pretrained(MODEL_NAME, torch_dtype=dtype).to(device)
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer.model_max_length = 512
+
+    q_emb = embed_texts(model, tokenizer, [r["query"] for r in records], args.batch_size, "Embedding queries")
+    d_emb = embed_texts(model, tokenizer, [r["document"] for r in records], args.batch_size, "Embedding documents")
+    del model
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
+    stats = {
+        "screened_vs_positive": 0,
+        "screened_vs_selected": 0,
+        "dropped_lt_min": 0,
+        "dropped_entities": Counter(),
+        "negative_counts": Counter(),
+        "pool_sizes": Counter(),
+    }
+    kept = []
+    for entity in tqdm(sorted(by_entity), desc="Mining"):
+        group = by_entity[entity]
+        selected_by_record = mine_group(
+            group, records, q_emb, d_emb, args.k, args.min_negatives, args.dedup_threshold, stats
+        )
+        for i in sorted(selected_by_record):
+            rec = dict(records[i])
+            rec["negatives"] = [records[j]["document"] for j in selected_by_record[i]]
+            kept.append(rec)
+
+    n_shards = write_shards(kept, args.output_dir, args.shard_size)
+
+    stats_out = {
+        "input": str(args.dataset),
+        "params": {"k": args.k, "min_negatives": args.min_negatives,
+                   "dedup_threshold": args.dedup_threshold, "model": MODEL_NAME},
+        "records_in": len(records),
+        "records_kept": len(kept),
+        "records_dropped": stats["dropped_lt_min"],
+        "drop_rate": round(stats["dropped_lt_min"] / len(records), 4),
+        "screened_vs_positive": stats["screened_vs_positive"],
+        "screened_vs_selected": stats["screened_vs_selected"],
+        "negative_count_distribution": dict(sorted(stats["negative_counts"].items())),
+        "pool_size_distribution": dict(sorted(stats["pool_sizes"].items())),
+        "entities_with_drops": len(stats["dropped_entities"]),
+        "top_dropped_entities": dict(stats["dropped_entities"].most_common(20)),
+        "shards": n_shards,
+    }
+    with open(Path(args.output_dir) / "mining_stats.json", "w") as f:
+        json.dump(stats_out, f, indent=2)
+
+    print(json.dumps({k: v for k, v in stats_out.items()
+                      if k not in ("negative_count_distribution", "pool_size_distribution",
+                                   "top_dropped_entities")}, indent=2))
 
 
 if __name__ == "__main__":
-    dist.init_process_group(timeout=timedelta(minutes=60))
-    torch.cuda.set_device(dist.get_rank())
-    args = parse_args()
-
-    output_dir = Path(args.output_dir)
-    if dist.get_rank() == 0:
-        if not output_dir.exists():
-            output_dir.mkdir(parents=True)
-
-    model_name = "thenlper/gte-base"
-    model = AutoModel.from_pretrained(model_name, torch_dtype=torch.float16).to(f"cuda:{dist.get_rank()}")
-
-    model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.model_max_length = 512
-
-    # load dataset and build association maps
-    queries, documents, dataset = load_dataset(args.dataset, args.query_key, args.document_key, args.negatives_key)
-
-    # precompute query dates
-    q_dates = [extract_month_year(rec[args.query_key]) for rec in dataset]
-
-    # strict mode: fail if any query is missing a month or year
-    missing_idxs = [i for i, d in enumerate(q_dates) if d is None]
-    if len(missing_idxs) > 0:
-        if dist.get_rank() == 0:
-            print(f"ERROR: {len(missing_idxs)}/{len(q_dates)} queries are missing a month or year and strict mode requires both.")
-            print("Examples of queries missing date:")
-            for idx in missing_idxs[:5]:
-                try:
-                    print(f"- {dataset[idx][args.query_key]}")
-                except Exception:
-                    print(f"- (could not show query at index {idx})")
-        # make sure all ranks reach the barrier before exiting
-        dist.barrier()
-        raise SystemExit("Aborting: some queries are missing month or year; please fix the dataset input.")
-
-    # build document index map (serialize document value for stable keying)
-    doc_index_map = {}
-    for idx, doc_entry in enumerate(documents):
-        doc_val = doc_entry[args.document_key]
-        try:
-            key = json.dumps(doc_val, sort_keys=True)
-        except Exception:
-            # fallback to str
-            key = str(doc_val)
-        doc_index_map[key] = idx
-
-    # initialize doc_dates and assign positive index mapping on each dataset record
-    doc_dates = [None] * len(documents)
-    for i, rec in enumerate(dataset):
-        q_date = q_dates[i]
-        rec_pos = rec[args.document_key]
-        if isinstance(rec_pos, list):
-            pos_idxs = []
-            for p in rec_pos:
-                try:
-                    k = json.dumps(p, sort_keys=True)
-                except Exception:
-                    k = str(p)
-                if k in doc_index_map:
-                    idx = doc_index_map[k]
-                    pos_idxs.append(idx)
-                    # assign document date (conservative: overwrite if None)
-                    if doc_dates[idx] is None:
-                        doc_dates[idx] = q_date
-            rec["_positive_idxs"] = pos_idxs
-        else:
-            try:
-                k = json.dumps(rec_pos, sort_keys=True)
-            except Exception:
-                k = str(rec_pos)
-            if k in doc_index_map:
-                idx = doc_index_map[k]
-                rec["_positive_idx"] = idx
-                if doc_dates[idx] is None:
-                    doc_dates[idx] = q_date
-
-    # embed queries and documents
-    q_embed = embed(model, tokenizer, queries, args.batch_size, args.query_key)
-    d_embed = embed(model, tokenizer, documents, args.batch_size, args.document_key, add_title=args.add_title)
-
-    del model
-    torch.cuda.empty_cache()
-
-    # create faiss index (GPU if available, CPU fallback)
-    index = faiss.IndexFlatIP(len(q_embed[0]))
-    try:
-        co = faiss.GpuMultipleClonerOptions()
-        co.shard = True
-        co.useFloat16 = True
-        index = faiss.index_cpu_to_all_gpus(index, co=co)
-        print_rank0("Using GPU FAISS index")
-    except (AttributeError, RuntimeError) as e:
-        print_rank0(f"GPU FAISS not available ({e}), using CPU index")
-    index.add(np.array(d_embed).astype(np.float32))
-
-    # initial neighbor count
-    initial_k = min(len(documents), max(args.k * args.neighbor_multiplier, args.k))
-    if args.neighbor_max and args.neighbor_max > 0:
-        initial_k = min(initial_k, args.neighbor_max)
-
-    scores, indices = knn_neighbors(q_embed, index, args.batch_size, initial_k)
-
-    # per-query filtering with iterative escalation when needed
-    for i, data in enumerate(tqdm(dataset)):
-        query = data[args.query_key]
-        neighbors = list(indices[i]) if i < len(indices) else []
-
-        collected = []
-        processed = set()
-        ptr = 0
-
-        # helper to check candidate validity
-        def is_valid_candidate(inx):
-            if inx == -1:
-                return False
-            # avoid positives
-            if isinstance(data[args.document_key], list):
-                if "_positive_idxs" in data and inx in data["_positive_idxs"]:
-                    return False
-            else:
-                if data.get("_positive_idx", None) == inx:
-                    return False
-            # avoid same-time
-            qd = q_dates[i]
-            if qd is not None and inx < len(doc_dates) and doc_dates[inx] == qd:
-                return False
-            # otherwise ok
-            return True
-
-        # attempt to collect k neighbors, expanding search if needed
-        current_k = len(neighbors)
-        while len(collected) < args.k:
-            while ptr < len(neighbors) and len(collected) < args.k:
-                inx = neighbors[ptr]
-                ptr += 1
-                if inx in processed:
-                    continue
-                processed.add(inx)
-                if is_valid_candidate(inx):
-                    collected.append(inx)
-
-            if len(collected) >= args.k:
-                break
-
-            # need to escalate search window
-            if current_k >= len(documents):
-                # exhausted corpus; stop (user requested this should not happen)
-                break
-
-            new_k = min(len(documents), max(current_k * 2, args.k))
-            if args.neighbor_max and args.neighbor_max > 0:
-                new_k = min(new_k, args.neighbor_max)
-
-            # perform an expanded search for this single query
-            query_vec = np.array(q_embed[i]).astype(np.float32).reshape(1, -1)
-            top_scores, top_indices = index.search(query_vec, new_k)
-            new_list = top_indices[0].tolist()
-            neighbors = merge_unique_preserve(neighbors, new_list)
-            current_k = len(neighbors)
-
-        # assign the collected negatives (map back to document values)
-        data[args.negatives_key] = [documents[idx][args.document_key] for idx in collected]
-
-    # synchronize - ensure all ranks have completed computation before writing
-    dist.barrier()
-
-    # Only rank 0 performs shard writing to avoid concurrent writers corrupting files.
-    if dist.get_rank() == 0:
-        metadata = {
-            "objective": {"self": [], "paired": [], "triplet": [[args.query_key, args.document_key, args.negatives_key]]}
-        }
-        shard_size = 100_000
-        for shard_start in tqdm(range(0, len(dataset), shard_size), desc="Writing shards"):
-            dataset_slice = dataset[shard_start : shard_start + shard_size]
-            for record in dataset_slice:
-                record["metadata"] = metadata
-            shard_num = shard_start // shard_size
-            final_path = output_dir / f"shard-{shard_num:05d}.jsonl.gz"
-            tmp_path = output_dir / f"shard-{shard_num:05d}.jsonl.gz.tmp"
-
-            # write to temp file, flush+fsync, then atomic replace
-            with gzip.open(tmp_path, "wt") as f:
-                for data in tqdm(dataset_slice, desc=f"Writing shard {shard_num:05d}"):
-                    f.write(json.dumps(data) + "\n")
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except Exception:
-                    # os.fsync may not be available or may fail on some filesystems; ignore if it fails
-                    pass
-
-            os.replace(tmp_path, final_path)
+    main()
