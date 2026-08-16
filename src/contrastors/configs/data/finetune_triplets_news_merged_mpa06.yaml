@@ -79,7 +79,7 @@ datasets:
       columns: ["query", "document", "negatives"]
 
   - name: "newscycle"
-    bucket: "/home/rkiddle/data/08_coverage/hard_negatives/merged/shard-{00000..00003}.jsonl.gz"  # range set after mining
+    bucket: "/home/rkiddle/data/08_coverage/hard_negatives/merged/shard-{00000..00003}.jsonl.gz"
     query_prefix: "search_query"
     document_prefix: "search_document"
     objective:
