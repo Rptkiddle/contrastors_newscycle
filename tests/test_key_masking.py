@@ -5,7 +5,6 @@ Run before training:  python -m pytest tests/test_key_masking.py -q
 
 import os
 
-import pytest
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
