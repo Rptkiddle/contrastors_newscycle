@@ -52,6 +52,8 @@ def parse_args():
     parser.add_argument("--dedup_threshold", type=float, default=0.7,
                         help="shingle Jaccard threshold, matching the data pipeline")
     parser.add_argument("--shard_size", type=int, default=100_000)
+    parser.add_argument("--pool_emb_cache", default=None,
+                        help="npy path to reuse pool embeddings across runs on the same pool")
     return parser.parse_args()
 
 
@@ -213,6 +215,15 @@ def main():
         by_entity[rec["entity_norm"]].append(i)
     print(f"{len(by_entity):,} entities")
 
+    # Split safety: negatives may only come from months the split trains on.
+    # The pairs file defines that window (merged spans all months, so this
+    # is a no-op there; for inter/extra specialists it excludes their test
+    # months, preserving the temporal train/test separation).
+    allowed_months = {(r["year"], r["month"]) for r in records}
+    pool_in_window = sum(1 for p in pool if (p["year"], p["month"]) in allowed_months)
+    print(f"train-month window: {len(allowed_months)} months; "
+          f"pool candidates in window: {pool_in_window:,}/{len(pool):,}")
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
     model = AutoModel.from_pretrained(MODEL_NAME, torch_dtype=dtype).to(device)
@@ -222,8 +233,15 @@ def main():
 
     q_emb = embed_texts(model, tokenizer, [r["query"] for r in records],
                         args.batch_size, "Embedding queries")
-    p_emb = embed_texts(model, tokenizer, [p["text"] for p in pool],
-                        args.batch_size, "Embedding pool")
+    if args.pool_emb_cache and os.path.exists(args.pool_emb_cache):
+        p_emb = np.load(args.pool_emb_cache)
+        assert p_emb.shape[0] == len(pool), "pool embedding cache does not match pool"
+        print(f"loaded pool embeddings from {args.pool_emb_cache}")
+    else:
+        p_emb = embed_texts(model, tokenizer, [p["text"] for p in pool],
+                            args.batch_size, "Embedding pool")
+        if args.pool_emb_cache:
+            np.save(args.pool_emb_cache, p_emb)
     del model
     if device == "cuda":
         torch.cuda.empty_cache()
@@ -243,7 +261,8 @@ def main():
     kept = []
     for entity in tqdm(sorted(by_entity), desc="Mining"):
         rec_idxs = by_entity[entity]
-        pool_idxs = pool_by_entity.get(entity, [])
+        pool_idxs = [i for i in pool_by_entity.get(entity, [])
+                     if (pool[i]["year"], pool[i]["month"]) in allowed_months]
         selected_by_record = mine_entity(
             rec_idxs, records, pool, pool_idxs, q_emb, p_emb,
             args.k, args.min_negatives, args.dedup_threshold, stats)
@@ -264,6 +283,8 @@ def main():
         "params": {"k": args.k, "min_negatives": args.min_negatives,
                    "dedup_threshold": args.dedup_threshold, "model": MODEL_NAME},
         "pool_articles": len(pool),
+        "allowed_months": len(allowed_months),
+        "pool_articles_in_window": pool_in_window,
         "records_in": len(records),
         "records_kept": len(kept),
         "records_dropped": stats["dropped_lt_min"],
