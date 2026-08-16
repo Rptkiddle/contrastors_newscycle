@@ -79,7 +79,7 @@ datasets:
       columns: ["query", "document", "negatives"]
 
   - name: "newscycle"
-    bucket: "/home/rkiddle/data/07_multipos/hard_negatives/mp3/shard-{00000..00003}.jsonl.gz"  # range set after mining — verify against mp3 shard count
+    bucket: "/home/rkiddle/data/07_multipos/hard_negatives/mp3/shard-{00000..00002}.jsonl.gz"  # 3 shards, 229,397 records (mined 2026-08-16)
     query_prefix: "search_query"
     document_prefix: "search_document"
     objective:
