@@ -176,6 +176,11 @@ def mine_entity(rec_idxs, records, pool, pool_idxs, q_emb, p_emb, k,
         else:
             selected_by_record[i] = selected
             stats["negative_counts"][len(selected)] += 1
+            if i % 200 == 0:  # sample ~0.5% of records for the QC histogram
+                for x in range(len(selected)):
+                    for y in range(x + 1, len(selected)):
+                        j = jaccard(shingle_of(selected[x]), shingle_of(selected[y]))
+                        stats["neg_pairwise_jaccard_hist"][round(j * 20) / 20] += 1
     return selected_by_record
 
 
@@ -230,6 +235,10 @@ def main():
         "dropped_entities": Counter(),
         "negative_counts": Counter(),
         "pool_sizes": Counter(),
+        # QC readout: pairwise Jaccard among each record's stored negatives
+        # (sampled records), binned to 0.05 — shows the diversity the
+        # selected-vs-selected screen actually achieves
+        "neg_pairwise_jaccard_hist": Counter(),
     }
     kept = []
     for entity in tqdm(sorted(by_entity), desc="Mining"):
@@ -263,6 +272,7 @@ def main():
         "screened_vs_selected": stats["screened_vs_selected"],
         "negative_count_distribution": dict(sorted(stats["negative_counts"].items())),
         "pool_size_distribution": dict(sorted(stats["pool_sizes"].items())),
+        "neg_pairwise_jaccard_hist": dict(sorted(stats["neg_pairwise_jaccard_hist"].items())),
         "entities_with_drops": len(stats["dropped_entities"]),
         "top_dropped_entities": dict(stats["dropped_entities"].most_common(20)),
         "shards": n_shards,
