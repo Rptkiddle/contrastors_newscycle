@@ -73,6 +73,27 @@ def calculate_auxiliary_loss(router_logits, num_experts, top_k, attention_mask=N
     return overall_loss * num_experts
 
 
+def mask_false_negatives(similarity, query_key_ids, document_key_ids, labels):
+    """Mask in-batch false negatives by (entity, month-year) key identity.
+
+    Any query-document logit where the document carries the query's key is
+    set to the dtype minimum before softmax — except the query's own
+    positive (labels). This covers both collision types under multi-positive
+    training: another positive of the same key gathered into the batch, and
+    a mined negative of one query being a correct answer for another query
+    of the same key.
+
+    params:
+        similarity: N x M logit matrix
+        query_key_ids: int64 tensor of shape N
+        document_key_ids: int64 tensor of shape M (gathered across ranks)
+        labels: int64 tensor of shape N, the positive column per query
+    """
+    mask = document_key_ids.unsqueeze(0) == query_key_ids.unsqueeze(1)
+    mask[torch.arange(similarity.size(0), device=similarity.device), labels] = False
+    return similarity.masked_fill(mask, torch.finfo(similarity.dtype).min)
+
+
 def clip_loss(
     query,
     document,
@@ -82,6 +103,8 @@ def clip_loss(
     tracker=None,
     dataset="",
     bidirectional=False,
+    query_key_ids=None,
+    document_key_ids=None,
 ):
     """Calculates the InfoNCE Loss for a batch of queries and documents.
     Inspired by: https://github.com/mlfoundations/open_clip/blob/main/src/open_clip/loss.py#L66
@@ -115,6 +138,12 @@ def clip_loss(
     # if training with negatives
     # multiply by world size since we only gather the document embeddings
     labels = labels * (document.size(0) // (query.size(0) * dist.get_world_size()))
+
+    if query_key_ids is not None and document_key_ids is not None:
+        if bidirectional:
+            raise NotImplementedError("key-id masking not supported with bidirectional loss")
+        similarity_query_document = mask_false_negatives(
+            similarity_query_document, query_key_ids, document_key_ids, labels)
 
     if bidirectional:
         similarity_document_query = logit_scale(torch.matmul(document, query.T))

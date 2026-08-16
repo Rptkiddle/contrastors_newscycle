@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +19,12 @@ from webdataset.tariterators import base_plus_ext
 from contrastors.distributed import print_in_order, print_rank_zero
 
 MAPPED_NAMES = {"paired": ["query", "document"], "self": ["query"], "triplet": ["query", "document", "negative"]}
+
+
+def key_str_to_int64(key: str) -> int:
+    """Deterministic string key → int64 for tensor transport (md5 top 8
+    bytes; collision probability over ~1e5 keys is negligible)."""
+    return int.from_bytes(hashlib.md5(key.encode("utf-8")).digest()[:8], "little", signed=True)
 KEY2PREFIX = {"query": "query", "document": "passage", "negative": "passage"}
 S3_COMMAND = "pipe: aws s3 cp --endpoint-url https://9fa58365a1a3d032127970d0bd9a1290.r2.cloudflarestorage.com/ --cli-read-timeout=300 {s3_uri} -"
 DEFAULT_COL_TO_MAX_TOKENS = {"query": 32, "document": 256, "negative": 256}
@@ -601,14 +608,20 @@ class StreamingShardDataset(IterableDataset):
         # pop negatives into document and sample N
         for mapped_name, col in zip(MAPPED_NAMES[contrastive_type], columns):
             if mapped_name == "negative":
+                # sample indices, not items: negative_key_ids (when present)
+                # must stay aligned with the sampled negatives
                 if len(data[col]) <= self.num_negatives:
-                    negatives = data[col]
+                    neg_idx = list(range(len(data[col])))
+                elif self.sample_negatives:
+                    neg_idx = random.sample(range(len(data[col])), self.num_negatives)
                 else:
-                    if self.sample_negatives:
-                        negatives = random.sample(data[col], self.num_negatives)
-                    else:
-                        negatives = data[col][: self.num_negatives]
+                    neg_idx = list(range(self.num_negatives))
+                negatives = [data[col][i] for i in neg_idx]
                 paired_data["document"] = [paired_data["document"]] + negatives
+                if "key_id" in data:
+                    neg_keys = data["negative_key_ids"]
+                    paired_data["query_key_id"] = data["key_id"]
+                    paired_data["doc_key_ids"] = [data["key_id"]] + [neg_keys[i] for i in neg_idx]
             else:
                 paired_data[mapped_name] = data[col]
 
@@ -683,6 +696,16 @@ class StreamingShardDataset(IterableDataset):
             tokenized_inputs["kd_scores"] = torch.tensor(
                 [sample["kd_scores"] for sample in samples], dtype=torch.float32
             )
+
+        # key ids for in-batch false-negative masking (multi-positive news
+        # shards). Batches are single-dataset, so either every sample has
+        # them or none does; flattening matches the document flattening.
+        if "query_key_id" in samples[0]:
+            tokenized_inputs["query_key_ids"] = torch.tensor(
+                [key_str_to_int64(s["query_key_id"]) for s in samples], dtype=torch.int64)
+            tokenized_inputs["document_key_ids"] = torch.tensor(
+                [key_str_to_int64(k) for s in samples for k in s["doc_key_ids"]],
+                dtype=torch.int64)
 
         return tokenized_inputs
 

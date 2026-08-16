@@ -8,7 +8,7 @@ import deepspeed
 from torch.utils.data import DataLoader
 
 from contrastors.dataset.text_text_loader import StreamingShardDataset, collate_fn, get_local_dataloader
-from contrastors.distributed import gather_with_grad, print_in_order
+from contrastors.distributed import gather, gather_with_grad, print_in_order
 from contrastors.loss import clip_loss, grad_cache_loss, calculate_auxiliary_loss
 from contrastors.models import BiEncoder, BiEncoderConfig, LogitScale
 from megablocks.layers import moe
@@ -302,6 +302,8 @@ class TextTextTrainer(BaseTrainer):
                 loss.backward()
 
     def _grad_cache_forward_step(self, model, batch, logit_scale, **kwargs):
+        if "query_key_ids" in batch:
+            raise NotImplementedError("key-id false-negative masking is not supported with grad_cache")
         # TODO: could pass this to grad cache loss and log?
         batch.pop("dataset_name")
         kwargs.pop("step")
@@ -324,6 +326,8 @@ class TextTextTrainer(BaseTrainer):
     def _forward_step(self, model, batch, logit_scale, matryoshka_dims=None, matroyshka_loss_weights=None, **kwargs):
         normalize = True if matryoshka_dims is None else False
         dataset_name = batch.pop("dataset_name")
+        query_key_ids = batch.pop("query_key_ids", None)
+        document_key_ids = batch.pop("document_key_ids", None)
         if self.config.model_args.num_experts > 0 and self.config.train_args.router_aux_loss_coef > 0:
             # if using gradient checkpointing, need to reclear the list
             moe.clear_load_balancing_loss()
@@ -348,6 +352,13 @@ class TextTextTrainer(BaseTrainer):
 
         queries = query_outputs["embedding"]
         all_documents = gather_with_grad(document_outputs["embedding"])
+
+        # documents are gathered across ranks, so their key ids must be too
+        if document_key_ids is not None:
+            query_key_ids = query_key_ids.to(model.device)
+            document_key_ids = gather(document_key_ids.to(model.device))
+            kwargs = {**kwargs, "query_key_ids": query_key_ids,
+                      "document_key_ids": document_key_ids}
 
         if matryoshka_dims:
             loss = 0.0
