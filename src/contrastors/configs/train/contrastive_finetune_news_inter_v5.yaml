@@ -1,4 +1,4 @@
-# NewsCycle V5 (inter): v1.5 recipe + V2 positives + boundary-targeted negatives (6 near/3 mid/3 far temporal + 8 cross-entity same-month), key-id masking.
+# NewsCycle V5 (inter): v1.5 matryoshka recipe + coverage-proportional cluster-centre positives (alpha=0.5, tau=0.90) + deterministic negatives 3 near/1 mid/1 far/2 cross + key-id masking + 2048-token news documents (per-dataset override).
 train_args:
   num_epochs: 1
   learning_rate: 2.0e-5
