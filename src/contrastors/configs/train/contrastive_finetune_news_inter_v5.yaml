@@ -31,7 +31,7 @@ model_args:
   model_type: "encoder"
   logit_scale: 50
   trainable_logit_scale: false
-  seq_len: 512
+  seq_len: 2048  # V5: model context for 2048-token news documents
   pooling: "mean"
   nomic_encoder: true
   add_prefix: true
@@ -47,6 +47,10 @@ data_args:
   workers: 8
   batch_size: 256
   seed: 42
+  # explicit globals (= the nomic mixture defaults; newscycle overrides
+  # per-dataset in its data-config entry — V5_PLAN section 1)
+  query_max_length: 32
+  document_max_length: 256
   shuffle: false
   download: true
   streaming: true

@@ -186,6 +186,7 @@ class StreamingShardDataset(IterableDataset):
         self.kd_loss = {}
         self.path2stream = {}
         self.path2prefix = {}
+        self.path2maxlen = {}  # per-dataset token-length overrides (see data yaml)
         self.query_only = set()
         self.global_batch_size = global_batch_size
         self.rng = random.Random(seed)
@@ -374,6 +375,21 @@ class StreamingShardDataset(IterableDataset):
                 if self.num_negatives > 0:
                     path2prefix[ds_name]["negative"] = ds.get("document_prefix", ds["query_prefix"])
                 self.path2prefix.update(path2prefix)
+
+            # per-dataset token-length overrides: `query_max_length` /
+            # `document_max_length` on a dataset entry apply to THAT
+            # dataset only; all others keep the global col_max_length.
+            # Added for NewsCycle V5 (2048-token news documents; the
+            # nomic mixture datasets stay at the recipe 32/256 defaults).
+            if ds.get("query_max_length") or ds.get("document_max_length"):
+                ds_name = Path(ds["bucket"]).parent.name
+                maxlen = dict(self.col_max_length)
+                if ds.get("query_max_length"):
+                    maxlen["query"] = ds["query_max_length"]
+                if ds.get("document_max_length"):
+                    maxlen["document"] = ds["document_max_length"]
+                    maxlen["negative"] = ds["document_max_length"]
+                self.path2maxlen[ds_name] = maxlen
 
         return paths
 
@@ -683,7 +699,8 @@ class StreamingShardDataset(IterableDataset):
 
                     collected = [f"{prefix}: {text}" for text in collected]
 
-            tokenized = self.tokenizer(collected, padding="max_length", truncation=True, return_tensors="pt", max_length=self.col_max_length[col])
+            max_length = self.path2maxlen.get(dataset_name, self.col_max_length)[col]
+            tokenized = self.tokenizer(collected, padding="max_length", truncation=True, return_tensors="pt", max_length=max_length)
             # if text gets truncated, we want to make sure the last token is the eos token
             # attention mask will already be full of 1s so we don't need to update
             # if text doesn't get truncated, the eos token will be the last token

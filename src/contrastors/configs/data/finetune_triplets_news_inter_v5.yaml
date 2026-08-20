@@ -82,6 +82,10 @@ datasets:
     bucket: "/home/rkiddle/data/09_boundary/hard_negatives/inter/shard-{00000..00001}.jsonl.gz"
     query_prefix: "search_query"
     document_prefix: "search_document"
+    # V5: 2048-token news documents; THIS DATASET ONLY (per-dataset
+    # override, see text_text_loader path2maxlen). Mixture stays 32/256.
+    query_max_length: 32
+    document_max_length: 2048
     objective:
       type: "triplet"
       columns: ["query", "document", "negatives"]
