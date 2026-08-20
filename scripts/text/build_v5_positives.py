@@ -164,8 +164,11 @@ def cmd_embed(args):
             mask = tok["attention_mask"].unsqueeze(-1).float()
             pooled = (hidden * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
             emb[s:s + len(batch)] = F.normalize(pooled, dim=1).half().cpu().numpy()
-    tmp = out.with_suffix(".npy.tmp")
-    np.save(tmp, emb)
+    # np.save appends ".npy" to bare paths; write via file handle so the
+    # tmp name is exact, then atomically rename
+    tmp = out.with_name(out.name + ".tmp")
+    with open(tmp, "wb") as fh:
+        np.save(fh, emb)
     os.replace(tmp, out)
     print(f"wrote {out} ({emb.shape})")
 
