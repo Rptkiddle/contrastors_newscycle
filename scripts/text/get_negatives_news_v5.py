@@ -18,10 +18,15 @@ Machinery (V5_PLAN sections 5-7):
   --query_emb_cache).
 - Split safety: same-entity candidates restricted to months present in
   the pairs file; cross candidates are same-month (trivially in-window).
-- False-negative screens: 5-gram shingle Jaccard >= --dedup_threshold
-  (0.6) vs ALL of the key's selected positives and vs already-selected
-  negatives. Optional tighter near-band screen via
-  --near_dedup_threshold.
+- Within-band dedup: a candidate is rejected if its document-cosine to
+  an already-selected negative CARRYING THE SAME BAND LABEL exceeds
+  --neg_dedup_tau (0.90); the band cursor advances, so the rejected
+  slot is refilled by the next-hardest candidate in that band. No
+  screening against positives and no cross-band comparisons: negatives
+  are true negatives by construction (different month or entity), and
+  duplication only wastes slots within a band subset. The 0.90 sits in
+  the antimode of the bimodal within-band pair-cosine distribution
+  (distinct-story bulk vs rewrite mode; see V5_PLAN section 5).
 - Key-id masking fields: negative_key_ids aligned with negatives; a
   cross negative that is some key's positive carries THAT key, else
   (entities[0], its own month).
@@ -36,7 +41,6 @@ import gzip
 import json
 import os
 import random
-import zlib
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -62,8 +66,8 @@ def parse_args():
     ap.add_argument("--output_dir", required=True)
     ap.add_argument("--batch_size", type=int, default=256,
                     help="query embedding batch size")
-    ap.add_argument("--dedup_threshold", type=float, default=0.6)
-    ap.add_argument("--near_dedup_threshold", type=float, default=None)
+    ap.add_argument("--neg_dedup_tau", type=float, default=0.90,
+                    help="within-band document-cosine dedup threshold")
     ap.add_argument("--shard_size", type=int, default=100_000)
     ap.add_argument("--query_emb_cache", default=None)
     return ap.parse_args()
@@ -76,21 +80,6 @@ def band_of(d):
     if d <= 6:
         return "mid"
     return "far"
-
-
-def shingle_set(text, n=5):
-    words = text.lower().split()
-    if len(words) < n:
-        return {zlib.crc32(" ".join(words).encode("utf-8"))}
-    return {zlib.crc32(" ".join(words[i:i + n]).encode("utf-8"))
-            for i in range(len(words) - n + 1)}
-
-
-def jaccard(a, b):
-    if not a or not b:
-        return 0.0
-    inter = len(a & b)
-    return inter / (len(a) + len(b) - inter)
 
 
 def key_id_for(year, month, entity_norm):
@@ -225,35 +214,28 @@ def main():
         if ent_pool:
             ent_sims = (q_emb[rec_idxs].astype(np.float32)
                         @ p_emb[ent_pool].astype(np.float32).T)
-        shingle_cache = {}
-
-        def sh(pidx):
-            if pidx not in shingle_cache:
-                shingle_cache[pidx] = shingle_set(pool[pidx]["text"])
-            return shingle_cache[pidx]
 
         for row, i in enumerate(rec_idxs):
             rec = records[i]
             rec_mi = midx(rec["year"], rec["month"])
-            # screen basis: ALL of this key's selected positives
-            pos_idxs = key_positives[rec["key_id"]]
-            pos_sh = [sh(p) for p in pos_idxs]
-            pos_set = set(pos_idxs)
-            selected, sel_sh, bands = [], [], []
+            pos_set = set(key_positives[rec["key_id"]])
+            selected, bands = [], []
 
-            def try_take(pidx, band, thr_pos):
+            def try_take(pidx, band):
                 if pidx in pos_set:
                     stats["skipped_own_positive"] += 1
                     return False
-                cand = sh(pidx)
-                if any(jaccard(cand, ps) >= thr_pos for ps in pos_sh):
-                    stats[f"screened_vs_positive_{band}"] += 1
-                    return False
-                if any(jaccard(cand, s2) >= args.dedup_threshold for s2 in sel_sh):
-                    stats["screened_vs_selected"] += 1
-                    return False
+                # within-band dedup: reject a near-duplicate (cosine >
+                # tau) of a negative already selected under the SAME
+                # band label; the caller's cursor advances, so the slot
+                # refills with the band's next-hardest candidate
+                cand_emb_v = p_emb[pidx].astype(np.float32)
+                for p2, b2 in zip(selected, bands):
+                    if b2 == band and \
+                       float(cand_emb_v @ p_emb[p2].astype(np.float32)) > args.neg_dedup_tau:
+                        stats[f"screened_within_band_{band}"] += 1
+                        return False
                 selected.append(pidx)
-                sel_sh.append(cand)
                 bands.append(band)
                 return True
 
@@ -270,14 +252,11 @@ def main():
 
             def fill(band, want):
                 got = 0
-                thr = (args.near_dedup_threshold
-                       if band == "near" and args.near_dedup_threshold is not None
-                       else args.dedup_threshold)
                 cands = by_band[band]
                 while got < want and cursors[band] < len(cands):
                     pidx = cands[cursors[band]]
                     cursors[band] += 1
-                    if try_take(pidx, band, thr):
+                    if try_take(pidx, band):
                         got += 1
                 return got
 
@@ -307,7 +286,7 @@ def main():
                     if entity in cand_ents[col]:
                         stats["cross_skipped_same_entity"] += 1
                         continue
-                    if try_take(cand_idxs[col], "cross", args.dedup_threshold):
+                    if try_take(cand_idxs[col], "cross"):
                         taken += 1
                 if taken > QUOTAS[3][1]:
                     stats["cross_backfill_extra"] += taken - QUOTAS[3][1]
@@ -351,8 +330,7 @@ def main():
         "temporal_delta_hist": {str(k): v for k, v in sorted(delta_hist.items())},
         "screens": {k: v for k, v in stats.items() if k.startswith(("screened", "skipped"))},
         "quotas": dict(QUOTAS),
-        "dedup_threshold": args.dedup_threshold,
-        "near_dedup_threshold": args.near_dedup_threshold,
+        "neg_dedup_tau": args.neg_dedup_tau,
         "shuffle_seed": SHUFFLE_SEED,
     }
     with open(Path(args.output_dir) / "mining_stats.json", "w") as f:
