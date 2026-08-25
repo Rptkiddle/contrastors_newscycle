@@ -29,6 +29,9 @@ train_args:
 
 model_args:
   model_type: "encoder"
+  # OOM corrective (canaries 26013908/26014340): activation
+  # checkpointing only — mathematically neutral, no recipe drift
+  gradient_checkpointing: true
   logit_scale: 50
   trainable_logit_scale: false
   seq_len: 2048  # V5: model context for 2048-token news documents
