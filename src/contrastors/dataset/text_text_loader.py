@@ -291,7 +291,8 @@ class StreamingShardDataset(IterableDataset):
         paths = []
         for ds in spec["datasets"]:
             assert set(ds.keys()).issubset(
-                set("name bucket objective weight kd_loss query_only query_prefix document_prefix".split())
+                set("name bucket objective weight kd_loss query_only query_prefix document_prefix"
+                    " query_max_length document_max_length".split())
             ), list(ds.keys())
             bucket = ds["bucket"]
             # TODO: we can probably remove the webdataset dependency
@@ -758,7 +759,8 @@ class LocalShardDataset(Dataset):
         paths = []
         for ds in spec["datasets"]:
             assert set(ds.keys()).issubset(
-                set("name bucket objective weight kd_loss query_only query_prefix document_prefix".split())
+                set("name bucket objective weight kd_loss query_only query_prefix document_prefix"
+                    " query_max_length document_max_length".split())
             ), list(ds.keys())
             bucket = ds["bucket"]
             urls = wds.shardlists.expand_urls(bucket)
