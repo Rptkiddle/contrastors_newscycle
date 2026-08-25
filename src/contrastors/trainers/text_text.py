@@ -162,6 +162,20 @@ class TextTextTrainer(BaseTrainer):
 
         if self.distributed and not self.deepspeed:
             model = model.to("cuda")
+            if config.gradient_checkpointing:
+                # Fix the rotary cos/sin caches at full length and final
+                # dtype BEFORE any checkpointed step: the query and
+                # document towers share the encoder, so a longer document
+                # forward regrows the cache between a query forward and
+                # its recompute, and non-reentrant checkpointing then
+                # fails metadata validation (surfacing as a CUDA illegal
+                # memory access). bf16 must match the training autocast
+                # dtype; a dtype change rebuilds the cache and reopens
+                # the fault (loudly).
+                with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    dummy = torch.full((1, model_config.seq_len), 100,
+                                       dtype=torch.long, device="cuda")
+                    model(input_ids=dummy, attention_mask=torch.ones_like(dummy))
             model = torch.nn.parallel.DistributedDataParallel(
                 model,
                 device_ids=[self.process_index],
