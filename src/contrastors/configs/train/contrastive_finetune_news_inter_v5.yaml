@@ -29,10 +29,10 @@ train_args:
 
 model_args:
   model_type: "encoder"
-  # 2048-doc memory + the flash-attn triton rotary fault are both
-  # resolved by 2-node training (32 records/GPU); checkpointing not
-  # needed — pure recipe (see V5_PLAN section 11, 2026-08-26)
-  gradient_checkpointing: false
+  # ON for 1024-doc single-node training: mathematically neutral
+  # (identical gradients), needed for tail-batch memory headroom;
+  # requires the trainer rotary-cache prewarm (commit 7f7ee3e)
+  gradient_checkpointing: true
   logit_scale: 50
   trainable_logit_scale: false
   seq_len: 2048  # V5: model context for 2048-token news documents

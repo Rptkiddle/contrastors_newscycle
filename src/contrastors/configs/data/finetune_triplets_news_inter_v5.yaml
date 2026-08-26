@@ -82,10 +82,15 @@ datasets:
     bucket: "/home/rkiddle/data/09_boundary/hard_negatives/inter/shard-{00000..00001}.jsonl.gz"
     query_prefix: "search_query"
     document_prefix: "search_document"
-    # V5: 2048-token news documents; THIS DATASET ONLY (per-dataset
-    # override, see text_text_loader path2maxlen). Mixture stays 32/256.
+    # V5 rev 2026-08-26 (Rupert, option B): 1024-token news documents;
+    # THIS DATASET ONLY (path2maxlen override), mixture stays 32/256.
+    # 1024 fully covers title+description for 100% of docs (median 45,
+    # max 500 tokens) and 72% of full docs / 78% of token mass; the
+    # truncated tail is exclusively unordered GDELT fragment-bag filler.
+    # 2048 was infeasible: single-node OOM / flash-attn triton rotary
+    # kernel fault at 64 rec/GPU / 2-node cost beyond SBU budget.
     query_max_length: 32
-    document_max_length: 2048
+    document_max_length: 1024
     objective:
       type: "triplet"
       columns: ["query", "document", "negatives"]
