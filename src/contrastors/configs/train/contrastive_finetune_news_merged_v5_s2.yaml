@@ -1,0 +1,62 @@
+# NewsCycle V5 (merged, all keys — production/external-benchmark model): v1.5 matryoshka recipe + coverage-proportional cluster-centre positives (alpha=0.5, tau=0.90) + deterministic negatives 3 near/1 mid/1 far/2 cross + key-id masking + 1024-token news documents (per-dataset override; option B).
+train_args:
+  num_epochs: 1
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  warmup_steps: 400
+  checkpoint: null
+  wandb: false
+  wandb_project_name: "newscycle"
+  wandb_entity: ""
+  wandb_run_name: "newscycle-v5-merged"
+  log_grads_every: 100
+  log_lr_every: 10
+  save_every: 4500
+  chunk_size: 32
+  output_dir: "ckpts/newscycle-v5-merged"
+  # if using deepspeed, this will be ignored
+  schedule_type: "linear"
+  max_grad_norm: 1.0
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  grad_cache: false
+  loss_fn: "clip"
+  use_fp8: false
+  clamp_logits: false
+  logit_max: 100
+  matryoshka_dims: [64, 128, 256, 512, 768]
+  matryoshka_loss_weights: [1, 1, 1, 1, 1]
+
+model_args:
+  model_type: "encoder"
+  # ON for 1024-doc single-node training: mathematically neutral
+  # (identical gradients), needed for tail-batch memory headroom;
+  # requires the trainer rotary-cache prewarm (commit 7f7ee3e)
+  gradient_checkpointing: true
+  logit_scale: 50
+  trainable_logit_scale: false
+  seq_len: 2048  # V5: model context for 2048-token news documents
+  pooling: "mean"
+  nomic_encoder: true
+  add_prefix: true
+  num_negatives: 7
+  tokenizer_name: "bert-base-uncased"
+  model_name: "nomic-ai/nomic-embed-text-v1-unsupervised"
+  pretrained: true
+  hamming: true
+
+
+data_args:
+  input_shards: "configs/data/finetune_triplets_news_merged_v5_s2.yaml"
+  workers: 8
+  batch_size: 256
+  seed: 42
+  # explicit globals (= the nomic mixture defaults; newscycle overrides
+  # per-dataset in its data-config entry — V5_PLAN section 1)
+  query_max_length: 32
+  document_max_length: 256
+  shuffle: false
+  download: true
+  streaming: true
+  weighted_sampling: false
+  verbose: true
