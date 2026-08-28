@@ -1,4 +1,4 @@
-"""V5 hard-negative miner: boundary-stratified, deterministic (V5_PLAN section 5).
+"""V2 hard-negative miner: boundary-stratified, deterministic (V2_PLAN section 5).
 
 Per record (query, positive) exactly SEVEN negatives are stored and all
 seven are trained on (num_negatives=7, no sampling):
@@ -11,7 +11,7 @@ seven are trained on (num_negatives=7, no sampling):
 Backfill when a band is thin: near -> mid -> far -> cross (cross supply
 is effectively unlimited, so no record is dropped).
 
-Machinery (V5_PLAN sections 5-7):
+Machinery (V2_PLAN sections 5-7):
 - Embeddings: nomic-embed-text-v1-unsupervised @2048. Documents come
   from the shared build cache (pool_emb_nomic.npy + ids); queries are
   embedded here with the "search_query: " prefix (or loaded from
@@ -26,7 +26,7 @@ Machinery (V5_PLAN sections 5-7):
   are true negatives by construction (different month or entity), and
   duplication only wastes slots within a band subset. The 0.90 sits in
   the antimode of the bimodal within-band pair-cosine distribution
-  (distinct-story bulk vs rewrite mode; see V5_PLAN section 5).
+  (distinct-story bulk vs rewrite mode; see V2_PLAN section 5).
 - Key-id masking fields: negative_key_ids aligned with negatives; a
   cross negative that is some key's positive carries THAT key, else
   (entities[0], its own month).
@@ -59,7 +59,7 @@ K_TOTAL = 7
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairs", required=True,
-                    help="train_{split}_v5.jsonl.gz from build_v5_positives emit")
+                    help="train_{split}_v2.jsonl.gz from build_v2_positives emit")
     ap.add_argument("--pool", required=True, help="salient_pool.jsonl.gz")
     ap.add_argument("--cache_dir", required=True,
                     help="dir with pool_emb_nomic.npy + pool_emb_nomic.ids.json.gz")

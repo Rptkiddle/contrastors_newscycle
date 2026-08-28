@@ -380,7 +380,7 @@ class StreamingShardDataset(IterableDataset):
             # per-dataset token-length overrides: `query_max_length` /
             # `document_max_length` on a dataset entry apply to THAT
             # dataset only; all others keep the global col_max_length.
-            # Added for NewsCycle V5 (2048-token news documents; the
+            # Added for NewsCycle V2 (2048-token news documents; the
             # nomic mixture datasets stay at the recipe 32/256 defaults).
             if ds.get("query_max_length") or ds.get("document_max_length"):
                 ds_name = Path(ds["bucket"]).parent.name

@@ -79,10 +79,10 @@ datasets:
       columns: ["query", "document", "negatives"]
 
   - name: "newscycle"
-    bucket: "/home/rkiddle/data/09_boundary/hard_negatives/extra/shard-{00000..00001}.jsonl.gz"
+    bucket: "/home/rkiddle1/data/09_boundary/hard_negatives/merged/shard-{00000..00002}.jsonl.gz"
     query_prefix: "search_query"
     document_prefix: "search_document"
-    # V5 rev 2026-08-26 (Rupert, option B): 1024-token news documents;
+    # snellius2 (rkiddle1) variant — paths only. V2 rev 2026-08-26 (Rupert, option B): 1024-token news documents;
     # THIS DATASET ONLY (path2maxlen override), mixture stays 32/256.
     # 1024 fully covers title+description for 100% of docs (median 45,
     # max 500 tokens) and 72% of full docs / 78% of token mass; the

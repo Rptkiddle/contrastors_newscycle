@@ -1,6 +1,6 @@
-"""V5 positive construction: coverage-proportional, cluster-then-centre.
+"""V2 positive construction: coverage-proportional, cluster-then-centre.
 
-Design of record: proj/2_NEWS/wp32-embeds/V5_PLAN.md sections 4 and 6.
+Design of record: proj/2_NEWS/wp32-embeds/V2_PLAN.md sections 4 and 6.
 
 Three subcommands, run in order:
 
@@ -14,14 +14,14 @@ Three subcommands, run in order:
           replaces its own cluster's pick. Emits picks + pairwise
           pick cosines + tau calibration data + inspection samples.
           NO redundancy screen here — tau is chosen at the inspection
-          checkpoint (V5_PLAN 8.1).
+          checkpoint (V2_PLAN 8.1).
   emit    Apply the redundancy screen at --tau (adaptive N_eff), draw
           one fresh query template per pair (uniform over 192,
           vendored from newscycle-gdelter process.py@679fc12,
-          asserted), write train_{split}_v5.jsonl.gz + build_stats.
+          asserted), write train_{split}_v2.jsonl.gz + build_stats.
 
 Record order note: pairs files are NOT shuffled here; the seeded
-shuffle happens at miner shard-write time (V5_PLAN section 7), because
+shuffle happens at miner shard-write time (V2_PLAN section 7), because
 the miner's output is what the trainer streams.
 """
 
@@ -301,7 +301,7 @@ def cmd_select(args):
             stats["keys"] += 1; stats["pairs_before_screen"] += len(sel)
             # calibration sample: within-key pick pairs, WITH shingle
             # Jaccard so the inspection can separate wire-rewrite pairs
-            # (Jaccard 0.5-0.7 zone) from distinct-story pairs (V5_PLAN 4.4)
+            # (Jaccard 0.5-0.7 zone) from distinct-story pairs (V2_PLAN 4.4)
             if len(sel) > 1 and rng_cal.random() < 0.02:
                 sh = [shingle_set(pool[i]["text"]) for i in sel]
                 for a in range(len(sel)):
@@ -336,7 +336,7 @@ def cmd_emit(args):
         _, display = load_split_keys(
             Path(args.input_dir) / f"train_{split}_v2pairs.jsonl.gz")
         gen = query_template_generator(TEMPLATE_SEED)
-        out_path = Path(args.out_dir) / f"train_{split}_v5.jsonl.gz"
+        out_path = Path(args.out_dir) / f"train_{split}_v2.jsonl.gz"
         stats = Counter(); neff_hist = Counter(); stub_count = 0
         with gzip.open(out_path, "wt") as f:
             for key in sorted(picks):

@@ -1,4 +1,4 @@
-"""Fixture test for the V5 miner (run: python test_get_negatives_news_v5.py).
+"""Fixture test for the V2 miner (run: python test_get_negatives_news_v2.py).
 
 Builds a synthetic pool with hand-set unit-vector embeddings, runs the
 miner end to end (query embeddings supplied via cache, so no GPU), and
@@ -103,7 +103,7 @@ def build_fixture(d):
 
 
 def run_miner(d, out):
-    cmd = [sys.executable, str(HERE / "get_negatives_news_v5.py"),
+    cmd = [sys.executable, str(HERE / "get_negatives_news_v2.py"),
            "--pairs", str(d / "pairs.jsonl.gz"),
            "--pool", str(d / "salient_pool.jsonl.gz"),
            "--cache_dir", str(d), "--output_dir", str(out),
